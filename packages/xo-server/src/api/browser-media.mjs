@@ -80,19 +80,26 @@ export async function attach({ id }) {
       host,
       name_label: `Browser media: ${session.name}`,
       name_description: 'Ephemeral shared browser media prototype; migration is not yet validated',
-      type: 'browseriso',
+      type: media.transport === 'nbd-client' ? 'browsernbd' : 'browseriso',
       content_type: 'iso',
       shared: true,
       sm_config: { 'browser-media-session': session.id },
-      device_config: {
-        url:
-          media.transport === 'nbd-ws'
-            ? `${media.origin.replace(/^http/, 'ws')}/api/browser-media/${session.readToken}/nbd`
-            : `${media.origin}/api/browser-media/${session.readToken}/iso`,
-        ...(media.transport === 'nbd-ws' ? { transport: 'nbd-ws' } : {}),
-        size: String(session.size),
-        ...(media.origin.startsWith('http:') ? { allow_http: 'true' } : {}),
-      },
+      device_config:
+        media.transport === 'nbd-client'
+          ? {
+              ...media.nbdConfig,
+              password: session.readToken,
+              size: String(session.size),
+            }
+          : {
+              url:
+                media.transport === 'nbd-ws'
+                  ? `${media.origin.replace(/^http/, 'ws')}/api/browser-media/${session.readToken}/nbd`
+                  : `${media.origin}/api/browser-media/${session.readToken}/iso`,
+              ...(media.transport === 'nbd-ws' ? { transport: 'nbd-ws' } : {}),
+              size: String(session.size),
+              ...(media.origin.startsWith('http:') ? { allow_http: 'true' } : {}),
+            },
     })
     delete resources.findSr
     const pbds = await xapi.call('SR.get_PBDs', resources.sr)

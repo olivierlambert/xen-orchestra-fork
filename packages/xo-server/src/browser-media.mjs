@@ -1,3 +1,5 @@
+import { NativeNbdServer } from './browser-media-nbd.mjs'
+import { readFileSync } from 'node:fs'
 import { registerBrowserMediaRest } from './browser-media-rest.mjs'
 import { randomBytes } from 'node:crypto'
 import { WebSocketServer } from 'ws'
@@ -68,7 +70,7 @@ export class BrowserMedia {
 
   upgrade(req, socket, head) {
     if (!req.url.startsWith(PREFIX)) return
-    if (this.transport === 'nbd-ws' && this.upgradeNbd(req, socket, head)) return
+    if (this.transport !== 'http' && this.upgradeNbd(req, socket, head)) return
     const session = [...this.sessions.values()].find(s => req.url === `${PREFIX}${s.browserToken}/socket`)
     // Browser capability is one-use; reject cross-origin browser upgrades too.
     let sameOrigin = true
@@ -90,7 +92,7 @@ export class BrowserMedia {
       ws.on('error', () => this.close(session))
       ws.on('close', () => this.close(session))
       ws.on('message', (data, binary) => {
-        if (this.transport === 'nbd-ws') return this.close(session)
+        if (this.transport !== 'http') return this.close(session)
         if (!binary || data.length < 4) return this.close(session)
         const id = data.readUInt32BE(0)
         const pending = session.pending.get(id)
@@ -111,25 +113,7 @@ export class BrowserMedia {
         return true
       }
       this.webSockets.handleUpgrade(req, socket, head, host => {
-        const id = token()
-        const pair = { host, producer: undefined, closed: false }
-        pair.close = () => {
-          if (pair.closed) return
-          pair.closed = true
-          clearTimeout(pair.timer)
-          hostSession.pairs.delete(id)
-          host.terminate()
-          pair.producer?.terminate()
-        }
-        pair.timer = setTimeout(pair.close, this.timeout).unref()
-        hostSession.pairs.set(id, pair)
-        host.on('error', pair.close).on('close', pair.close)
-        // The NBD server speaks first, so host data before pairing is invalid.
-        host.on('message', (data, binary) => {
-          if (!binary || pair.producer?.readyState !== 1) return pair.close()
-          this.forwardNbd(pair, host, pair.producer, data)
-        })
-        hostSession.socket.send(JSON.stringify({ openNbd: `${PREFIX}${hostSession.browserToken}/nbd/${id}` }))
+        this.pairNbd(hostSession, host)
       })
       return true
     }
@@ -157,6 +141,28 @@ export class BrowserMedia {
       return true
     }
     return false
+  }
+
+  pairNbd(hostSession, host) {
+    const id = token()
+    const pair = { host, producer: undefined, closed: false }
+    pair.close = () => {
+      if (pair.closed) return
+      pair.closed = true
+      clearTimeout(pair.timer)
+      hostSession.pairs.delete(id)
+      host.terminate()
+      pair.producer?.terminate()
+    }
+    pair.timer = setTimeout(pair.close, this.timeout).unref()
+    hostSession.pairs.set(id, pair)
+    host.on('error', pair.close).on('close', pair.close)
+    // The NBD server speaks first, so host data before pairing is invalid.
+    host.on('message', (data, binary) => {
+      if (!binary || pair.producer?.readyState !== 1) return pair.close()
+      this.forwardNbd(pair, host, pair.producer, data)
+    })
+    hostSession.socket.send(JSON.stringify({ openNbd: `${PREFIX}${hostSession.browserToken}/nbd/${id}` }))
   }
 
   forwardNbd(pair, source, target, data) {
@@ -201,7 +207,7 @@ export class BrowserMedia {
 
   async http(req, res, next) {
     if (!req.url.startsWith(PREFIX)) return next()
-    if (this.transport === 'nbd-ws') return res.writeHead(404).end()
+    if (this.transport !== 'http') return res.writeHead(404).end()
     const session = [...this.sessions.values()].find(s => req.url === `${PREFIX}${s.readToken}/iso`)
     if (session === undefined) {
       res.writeHead(404).end()
@@ -270,6 +276,7 @@ export class BrowserMedia {
   }
 
   stop() {
+    this.nativeNbd?.stop()
     clearInterval(this.timer)
     for (const session of this.sessions.values()) this.close(session)
     this.webSockets.close()
@@ -292,9 +299,28 @@ export function installBrowserMedia(webServer, express, xo) {
     throw new Error('XO_BROWSER_MEDIA_ORIGIN must be the HTTPS origin reachable by hosts')
   }
   const transport = process.env.XO_BROWSER_MEDIA_TRANSPORT ?? 'http'
-  if (!['http', 'nbd-ws'].includes(transport)) throw new Error('Invalid browser media transport')
+  if (!['http', 'nbd-ws', 'nbd-client'].includes(transport)) throw new Error('Invalid browser media transport')
   const media = new BrowserMedia({ transport })
   media.origin = origin.origin
+  if (transport === 'nbd-client') {
+    const port = Number(process.env.XO_BROWSER_MEDIA_NBD_PORT ?? 10809)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid browser NBD port')
+    const allowPlaintext = process.env.XO_BROWSER_MEDIA_NBD_ALLOW_PLAINTEXT === '1'
+    const keyPath = process.env.XO_BROWSER_MEDIA_NBD_TLS_KEY
+    const certPath = process.env.XO_BROWSER_MEDIA_NBD_TLS_CERT
+    if (!allowPlaintext && (!keyPath || !certPath)) throw new Error('Native browser NBD requires TLS key/certificate')
+    media.nbdConfig = {
+      host: origin.hostname,
+      port: String(port),
+      ...(allowPlaintext ? { allow_plaintext: 'true' } : {}),
+    }
+    if (process.env.XO_BROWSER_MEDIA_NBD_CA_FILE) media.nbdConfig.ca_file = process.env.XO_BROWSER_MEDIA_NBD_CA_FILE
+    media.nativeNbd = new NativeNbdServer(media, {
+      allowPlaintext,
+      tls: keyPath && certPath ? { key: readFileSync(keyPath), cert: readFileSync(certPath) } : undefined,
+    })
+    media.nativeNbd.listen(port, process.env.XO_BROWSER_MEDIA_NBD_BIND ?? '0.0.0.0')
+  }
   xo.defineProperty('browserMedia', media)
   const unregisterRest = registerBrowserMediaRest(xo)
   xo.hooks.on('stop', unregisterRest)

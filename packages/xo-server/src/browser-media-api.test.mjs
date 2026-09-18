@@ -214,3 +214,21 @@ test('NBD mode gives the shared SR only a host WebSocket capability', async () =
   })
   await disconnect.call(xo, { id: 'session' })
 })
+
+test('native NBD uses the normal browsernbd SR and XAPI password secret convention', async () => {
+  const { xo, calls } = fixture()
+  xo.browserMedia.transport = 'nbd-client'
+  xo.browserMedia.nbdConfig = { host: 'xo.example', port: '10809', ca_file: '/host/ca.pem' }
+  await attach.call(xo, { id: 'session' })
+  const sr = calls.find(call => call[0] === 'SR_create')[1]
+  assert.equal(sr.type, 'browsernbd')
+  assert.deepEqual(sr.device_config, {
+    host: 'xo.example',
+    port: '10809',
+    ca_file: '/host/ca.pem',
+    password: 'read',
+    size: '32768',
+  })
+  assert.equal(sr.shared, true)
+  await disconnect.call(xo, { id: 'session' })
+})
