@@ -201,3 +201,16 @@ test('creates a missing CD drive while halted', async () => {
   assert.equal(drive.VDI, 'vdi')
   await disconnect.call(xo, { id: 'session' })
 })
+
+test('NBD mode gives the shared SR only a host WebSocket capability', async () => {
+  const { xo, calls } = fixture()
+  xo.browserMedia.transport = 'nbd-ws'
+  await attach.call(xo, { id: 'session' })
+  const sr = calls.find(call => call[0] === 'SR_create')[1]
+  assert.deepEqual(sr.device_config, {
+    transport: 'nbd-ws',
+    url: 'wss://xo.example/api/browser-media/read/nbd',
+    size: '32768',
+  })
+  await disconnect.call(xo, { id: 'session' })
+})

@@ -1,3 +1,4 @@
+import { openBrowserNbd } from 'xo-common/browser-nbd.js'
 import React from 'react'
 import { createBrowserMedia, attachBrowserMedia, disconnectBrowserMedia, getBrowserMediaEnabled } from './xo'
 
@@ -30,6 +31,10 @@ async function connect(vm, file) {
           const request = JSON.parse(data)
           if (request.ready) {
             resolve()
+            return
+          }
+          if (request.openNbd !== undefined) {
+            openBrowserNbd(file, socket, request.openNbd)
             return
           }
           const { id, offset, length } = request

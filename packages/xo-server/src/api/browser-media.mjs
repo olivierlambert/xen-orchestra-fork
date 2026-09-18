@@ -7,7 +7,7 @@ export function create({ vm, name, size }) {
   if (!['Running', 'Halted'].includes(vm.power_state)) throw new Error('VM must be running or halted')
   const media = service(this)
   const session = media.create({ owner: this.apiContext.user.id, vm: vm.id, name, size })
-  return { id: session.id, socket: `/api/browser-media/${session.browserToken}/socket` }
+  return { transport: media.transport, id: session.id, socket: `/api/browser-media/${session.browserToken}/socket` }
 }
 create.permission = 'admin'
 create.params = {
@@ -85,7 +85,11 @@ export async function attach({ id }) {
       shared: true,
       sm_config: { 'browser-media-session': session.id },
       device_config: {
-        url: `${media.origin}/api/browser-media/${session.readToken}/iso`,
+        url:
+          media.transport === 'nbd-ws'
+            ? `${media.origin.replace(/^http/, 'ws')}/api/browser-media/${session.readToken}/nbd`
+            : `${media.origin}/api/browser-media/${session.readToken}/iso`,
+        ...(media.transport === 'nbd-ws' ? { transport: 'nbd-ws' } : {}),
         size: String(session.size),
         ...(media.origin.startsWith('http:') ? { allow_http: 'true' } : {}),
       },

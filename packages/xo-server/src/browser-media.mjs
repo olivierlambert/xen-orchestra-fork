@@ -10,7 +10,8 @@ const token = () => randomBytes(32).toString('hex')
 export class BrowserMedia {
   sessions = new Map()
 
-  constructor({ timeout = 30000 } = {}) {
+  constructor({ timeout = 30000, transport = 'http' } = {}) {
+    this.transport = transport
     this.timeout = timeout
     this.webSockets = new WebSocketServer({ noServer: true, maxPayload: MAX_READ + 4, perMessageDeflate: false })
     this.timer = setInterval(
@@ -38,6 +39,7 @@ export class BrowserMedia {
       name,
       size,
       pending: new Map(),
+      pairs: new Map(),
       nextId: 0,
       expires: Date.now() + this.timeout,
       closed: false,
@@ -57,6 +59,7 @@ export class BrowserMedia {
     session.closed = true
     this.sessions.delete(session.id)
     session.socket?.terminate()
+    for (const pair of session.pairs.values()) pair.close()
     for (const pending of session.pending.values()) pending.reject(new Error('Media disconnected'))
     session.pending.clear()
     // The attachment layer owns asynchronous XAPI cleanup and retries.
@@ -65,6 +68,7 @@ export class BrowserMedia {
 
   upgrade(req, socket, head) {
     if (!req.url.startsWith(PREFIX)) return
+    if (this.transport === 'nbd-ws' && this.upgradeNbd(req, socket, head)) return
     const session = [...this.sessions.values()].find(s => req.url === `${PREFIX}${s.browserToken}/socket`)
     // Browser capability is one-use; reject cross-origin browser upgrades too.
     let sameOrigin = true
@@ -86,6 +90,7 @@ export class BrowserMedia {
       ws.on('error', () => this.close(session))
       ws.on('close', () => this.close(session))
       ws.on('message', (data, binary) => {
+        if (this.transport === 'nbd-ws') return this.close(session)
         if (!binary || data.length < 4) return this.close(session)
         const id = data.readUInt32BE(0)
         const pending = session.pending.get(id)
@@ -93,6 +98,77 @@ export class BrowserMedia {
         pending.resolve(data.subarray(4))
       })
       ws.send(JSON.stringify({ ready: true }))
+    })
+  }
+
+  // One independent NBD byte stream per host connection. No disk protocol
+  // parsing in XO: capabilities and lifetime are the relay's only concerns.
+  upgradeNbd(req, socket, head) {
+    const hostSession = [...this.sessions.values()].find(s => req.url === `${PREFIX}${s.readToken}/nbd`)
+    if (hostSession !== undefined) {
+      if (hostSession.socket?.readyState !== 1 || hostSession.pairs.size >= 8) {
+        socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n')
+        return true
+      }
+      this.webSockets.handleUpgrade(req, socket, head, host => {
+        const id = token()
+        const pair = { host, producer: undefined, closed: false }
+        pair.close = () => {
+          if (pair.closed) return
+          pair.closed = true
+          clearTimeout(pair.timer)
+          hostSession.pairs.delete(id)
+          host.terminate()
+          pair.producer?.terminate()
+        }
+        pair.timer = setTimeout(pair.close, this.timeout).unref()
+        hostSession.pairs.set(id, pair)
+        host.on('error', pair.close).on('close', pair.close)
+        // The NBD server speaks first, so host data before pairing is invalid.
+        host.on('message', (data, binary) => {
+          if (!binary || pair.producer?.readyState !== 1) return pair.close()
+          this.forwardNbd(pair, host, pair.producer, data)
+        })
+        hostSession.socket.send(JSON.stringify({ openNbd: `${PREFIX}${hostSession.browserToken}/nbd/${id}` }))
+      })
+      return true
+    }
+    for (const session of this.sessions.values()) {
+      const prefix = `${PREFIX}${session.browserToken}/nbd/`
+      if (!req.url.startsWith(prefix)) continue
+      const pair = session.pairs.get(req.url.slice(prefix.length))
+      let sameOrigin = false
+      try {
+        sameOrigin = req.headers.origin === undefined || new URL(req.headers.origin).host === req.headers.host
+      } catch (_) {}
+      if (pair === undefined || pair.producer !== undefined || !sameOrigin) {
+        socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
+        return true
+      }
+      this.webSockets.handleUpgrade(req, socket, head, producer => {
+        clearTimeout(pair.timer)
+        pair.producer = producer
+        producer.on('error', pair.close).on('close', pair.close)
+        producer.on('message', (data, binary) => {
+          if (!binary) return pair.close()
+          this.forwardNbd(pair, producer, pair.host, data)
+        })
+      })
+      return true
+    }
+    return false
+  }
+
+  forwardNbd(pair, source, target, data) {
+    // Stop receiving until this frame is flushed. Bound slow-peer buffering
+    // and tear down a stalled stream without affecting another host's stream.
+    if (target.readyState !== 1 || target.bufferedAmount > 4 * MAX_READ) return pair.close()
+    source.pause()
+    const timer = setTimeout(pair.close, this.timeout).unref()
+    target.send(data, { binary: true }, error => {
+      clearTimeout(timer)
+      if (error) pair.close()
+      else if (!pair.closed) source.resume()
     })
   }
 
@@ -125,6 +201,7 @@ export class BrowserMedia {
 
   async http(req, res, next) {
     if (!req.url.startsWith(PREFIX)) return next()
+    if (this.transport === 'nbd-ws') return res.writeHead(404).end()
     const session = [...this.sessions.values()].find(s => req.url === `${PREFIX}${s.readToken}/iso`)
     if (session === undefined) {
       res.writeHead(404).end()
@@ -214,7 +291,9 @@ export function installBrowserMedia(webServer, express, xo) {
   ) {
     throw new Error('XO_BROWSER_MEDIA_ORIGIN must be the HTTPS origin reachable by hosts')
   }
-  const media = new BrowserMedia()
+  const transport = process.env.XO_BROWSER_MEDIA_TRANSPORT ?? 'http'
+  if (!['http', 'nbd-ws'].includes(transport)) throw new Error('Invalid browser media transport')
+  const media = new BrowserMedia({ transport })
   media.origin = origin.origin
   xo.defineProperty('browserMedia', media)
   const unregisterRest = registerBrowserMediaRest(xo)

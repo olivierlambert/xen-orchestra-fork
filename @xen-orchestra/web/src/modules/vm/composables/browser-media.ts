@@ -1,5 +1,6 @@
 import { fetchDelete, fetchPost } from '@/shared/utils/fetch.util.ts'
 import { shallowReactive } from 'vue'
+import { openBrowserNbd } from 'xo-common/browser-nbd.js'
 
 type Session = {
   name: string
@@ -54,6 +55,10 @@ export async function connectBrowserMedia(vmId: string, file: File) {
           if (request.ready) {
             clearTimeout(timer)
             resolve()
+            return
+          }
+          if (request.openNbd !== undefined) {
+            openBrowserNbd(file, socket, request.openNbd)
             return
           }
           const { id, offset, length } = request
