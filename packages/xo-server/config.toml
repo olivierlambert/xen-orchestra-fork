@@ -139,6 +139,16 @@ writeBlockConcurrency = 16
 enabled = false
 threshold = 1000
 
+[browserMedia]
+# Experimental: stream an ISO selected in the browser into a VM CD drive.
+#
+# Requires `iscsi.advertisedAddress` to be set explicitly. Hosts use their stock
+# iSCSI driver, nothing needs to be installed on them. Each session opens a
+# temporary iSCSI listener on an ephemeral port that its host must reach. The
+# media is attached to a single host, so the VM cannot migrate while it is
+# inserted. CHAP authenticates the iSCSI link but does not encrypt it.
+enabled = false
+
 [http]
 useForwardedHeaders = false
 

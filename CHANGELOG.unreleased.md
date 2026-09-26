@@ -11,6 +11,7 @@
 
 > Users must be able to say: "Nice enhancement, I'm eager to test it"
 
+- [XO5/XO6/VM] Add opt-in local ISO streaming from the browser, without a full upload or host changes. Keep the tab open while the VM uses the media (PR [#10426](https://github.com/vatesfr/xen-orchestra/pull/10426))
 - [i18n] Update Chinese (Simplified Han script), Czech, Dutch, Finnish, Italian, Norwegian, Persian, Portuguese, Russian, Slovak, Spanish and Turkish translations (PR [#10396](https://github.com/vatesfr/xen-orchestra/pull/10396))
 
 ### Bug fixes
@@ -35,5 +36,7 @@
 
 - @xen-orchestra/web minor
 - @xen-orchestra/web-core minor
+- xo-server minor
+- xo-web minor
 
 <!--packages-end-->
