@@ -1,0 +1,21 @@
+{
+  "extends": "@vue/tsconfig/tsconfig.dom.json",
+  "include": [
+    "env.d.ts",
+    "./src/**/*",
+    "./src/**/*.vue",
+    "../web-core/env.d.ts",
+    "../web-core/lib/**/*",
+    "../web-core/lib/**/*.vue"
+  ],
+  "exclude": ["../web-core/lib/composables/default-tab.composable.ts"],
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "rootDir": "..",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@core/*": ["../web-core/lib/*"]
+    }
+  }
+}

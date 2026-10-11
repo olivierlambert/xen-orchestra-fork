@@ -54,7 +54,7 @@ module.exports = {
       },
     },
     {
-      files: ['@xen-orchestra/{web-core,lite,web}/**/*.{vue,ts}'],
+      files: ['@xen-orchestra/{web-core,lite,web,portal}/**/*.{vue,ts}'],
       parser: 'vue-eslint-parser',
       parserOptions: {
         sourceType: 'module',
@@ -289,7 +289,7 @@ module.exports = {
       },
     },
     {
-      files: ['@xen-orchestra/{web-core,lite,web}/src/pages/**/*.vue'],
+      files: ['@xen-orchestra/{web-core,lite,web,portal}/src/pages/**/*.vue'],
       parserOptions: {
         sourceType: 'module',
       },
@@ -298,7 +298,7 @@ module.exports = {
       },
     },
     {
-      files: ['@xen-orchestra/{web-core,lite,web}/src/route-map.d.ts'],
+      files: ['@xen-orchestra/{web-core,lite,web,portal}/src/route-map.d.ts'],
       parserOptions: {
         sourceType: 'module',
       },

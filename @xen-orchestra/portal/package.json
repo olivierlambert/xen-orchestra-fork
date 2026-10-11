@@ -1,0 +1,51 @@
+{
+  "name": "@xen-orchestra/portal",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "run-p type-check \"build-only {@}\" --",
+    "preview": "vite preview",
+    "build-only": "vite build",
+    "type-check": "vue-tsc --build --force"
+  },
+  "devDependencies": {
+    "@csstools/postcss-global-data": "^3.0.0",
+    "@intlify/unplugin-vue-i18n": "^6.0.3",
+    "@tsconfig/node18": "^18.2.4",
+    "@types/node": "^18.19.80",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "@vue/tsconfig": "^0.9.0",
+    "@vueuse/core": "^14.0.0",
+    "@vueuse/math": "^14.0.0",
+    "@xen-orchestra/web-core": "^0.58.0",
+    "npm-run-all2": "^7.0.2",
+    "pinia": "^3.0.1",
+    "postcss": "^8.5.3",
+    "postcss-color-function": "^4.1.0",
+    "postcss-custom-media": "^11.0.5",
+    "postcss-nested": "^7.0.2",
+    "typescript": "^6.0.0",
+    "vite": "^8.0.0",
+    "vue": "~3.5.13",
+    "vue-i18n": "^11.1.2",
+    "vue-router": "5.0.6",
+    "vue-tsc": "^3.0.0"
+  },
+  "homepage": "https://github.com/vatesfr/xen-orchestra/tree/master/@xen-orchestra/portal",
+  "bugs": "https://github.com/vatesfr/xen-orchestra/issues",
+  "repository": {
+    "directory": "@xen-orchestra/portal",
+    "type": "git",
+    "url": "https://github.com/vatesfr/xen-orchestra.git"
+  },
+  "author": {
+    "name": "Vates SAS",
+    "url": "https://vates.fr"
+  },
+  "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=18"
+  }
+}
