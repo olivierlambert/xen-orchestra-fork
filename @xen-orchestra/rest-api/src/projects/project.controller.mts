@@ -241,17 +241,21 @@ export class ProjectController extends Controller {
   }
 
   /**
-   * Backup policies the instances of the project can be subscribed to. Requires a role in the project.
+   * Backup policies the instances of the project can be subscribed to, with the tag marking subscribed instances.
+   *
+   * Requires a role in the project.
    */
   @Extension('x-mcp-exposure', 'allow')
   @Get('{id}/backup-policies')
   @Security('*', ['acl'])
   @Response(forbiddenOperationResp.status, forbiddenOperationResp.description)
-  async getBackupPolicies(@Path() id: string): Promise<{ id: string; name: string }[]> {
+  async getBackupPolicies(@Path() id: string): Promise<{ id: string; name: string; tag: string }[]> {
     await this.#restApi.xoApp.assertProjectRole(this.#user, id as XoProject['id'], 'viewer')
-    return (await this.#restApi.xoApp.getProjectBackupPolicies(id as XoProject['id'])).map(({ id, name }) => ({
+    // the tag tells which instances are subscribed, from their tags
+    return (await this.#restApi.xoApp.getProjectBackupPolicies(id as XoProject['id'])).map(({ id, name, tag }) => ({
       id,
       name,
+      tag,
     }))
   }
 

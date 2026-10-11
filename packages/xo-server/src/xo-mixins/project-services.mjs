@@ -415,7 +415,45 @@ export default class ProjectServices {
         name ?? `${restorePoint.vmName} (restored ${new Date(restorePoint.timestamp).toISOString().slice(0, 16)})`
       )
       await this.setVmProject(vmId, projectId)
+      await this.#reassignPublicAddresses(projectId, vmId)
       return vmId
+    })
+  }
+
+  /**
+   * A restored VM comes with the VIFs of the original, locked to its addresses: they are released and new
+   * addresses are allocated from the pools of the project, within the quota. VIFs which cannot get one are left
+   * without public IP.
+   *
+   * @param {string} projectId
+   * @param {string} vmId
+   */
+  async #reassignPublicAddresses(projectId, vmId) {
+    const app = this._app
+    const xapi = app.getXapi(vmId)
+    await this.withIpAllocationLock(async () => {
+      for (const vifId of app.getObject(vmId, 'VM').VIFs) {
+        const vif = app.getObject(vifId, 'VIF')
+        const vifRef = vif._xapiRef
+        await xapi.call('VIF.set_ipv4_allowed', vifRef, [])
+        await xapi.call('VIF.set_locking_mode', vifRef, 'network_default')
+        // the quota check reads the XO objects
+        await xapi.barrier(vifRef)
+
+        const [allocation] = await this.pickProjectAddresses(projectId, [vif.$network])
+        if (allocation === undefined) {
+          continue
+        }
+        try {
+          await app.assertProjectQuota(projectId, { ips: 1 })
+        } catch {
+          continue
+        }
+        await xapi.call('VIF.set_ipv4_allowed', vifRef, [allocation.address])
+        await xapi.call('VIF.set_locking_mode', vifRef, 'locked')
+        await xapi.barrier(vifRef)
+        await this.registerVifAddress(vifId, allocation.address, allocation.pool.id)
+      }
     })
   }
 
