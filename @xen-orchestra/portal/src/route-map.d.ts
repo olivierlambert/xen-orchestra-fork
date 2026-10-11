@@ -14,11 +14,14 @@ import type {
   ParamValueZeroOrMore,
   ParamValueZeroOrOne,
 } from 'vue-router'
-import type { _ExtractParamParserType } from 'vue-router/experimental'
+import type {
+  _ExtractParamParserType,
+} from 'vue-router/experimental'
 
 declare module 'vue-router' {
   interface TypesConfig {
-    ParamParsers: never
+    ParamParsers:
+      | never
   }
 }
 
@@ -32,29 +35,71 @@ declare module 'vue-router/auto-routes' {
       '/:path(.*)',
       { path: ParamValue<true> },
       { path: ParamValue<false> },
-      never
-    >
-    '/access': RouteRecordInfo<'/access', '/access', Record<never, never>, Record<never, never>, never>
-    '/account': RouteRecordInfo<'/account', '/account', Record<never, never>, Record<never, never>, never>
-    '/dashboard': RouteRecordInfo<'/dashboard', '/dashboard', Record<never, never>, Record<never, never>, never>
-    '/instances/': RouteRecordInfo<'/instances/', '/instances', Record<never, never>, Record<never, never>, never>
+      | never
+    >,
+    '/access': RouteRecordInfo<
+      '/access',
+      '/access',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/account': RouteRecordInfo<
+      '/account',
+      '/account',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/dashboard': RouteRecordInfo<
+      '/dashboard',
+      '/dashboard',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/instances/': RouteRecordInfo<
+      '/instances/',
+      '/instances',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/instances/[id]': RouteRecordInfo<
       '/instances/[id]',
       '/instances/:id',
       { id: ParamValue<true> },
       { id: ParamValue<false> },
-      never
-    >
+      | never
+    >,
     '/instances/new': RouteRecordInfo<
       '/instances/new',
       '/instances/new',
       Record<never, never>,
       Record<never, never>,
-      never
-    >
-    '/members': RouteRecordInfo<'/members', '/members', Record<never, never>, Record<never, never>, never>
-    '/networks': RouteRecordInfo<'/networks', '/networks', Record<never, never>, Record<never, never>, never>
-    '/usage': RouteRecordInfo<'/usage', '/usage', Record<never, never>, Record<never, never>, never>
+      | never
+    >,
+    '/members': RouteRecordInfo<
+      '/members',
+      '/members',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/networks': RouteRecordInfo<
+      '/networks',
+      '/networks',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/usage': RouteRecordInfo<
+      '/usage',
+      '/usage',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
   }
 
   /**
@@ -69,44 +114,64 @@ declare module 'vue-router/auto-routes' {
    */
   export interface _RouteFileInfoMap {
     'src/pages/[...path].vue': {
-      routes: '/[...path]'
-      views: never
+      routes:
+        | '/[...path]'
+      views:
+        | never
     }
     'src/pages/access.vue': {
-      routes: '/access'
-      views: never
+      routes:
+        | '/access'
+      views:
+        | never
     }
     'src/pages/account.vue': {
-      routes: '/account'
-      views: never
+      routes:
+        | '/account'
+      views:
+        | never
     }
     'src/pages/dashboard.vue': {
-      routes: '/dashboard'
-      views: never
+      routes:
+        | '/dashboard'
+      views:
+        | never
     }
     'src/pages/instances/index.vue': {
-      routes: '/instances/'
-      views: never
+      routes:
+        | '/instances/'
+      views:
+        | never
     }
     'src/pages/instances/[id].vue': {
-      routes: '/instances/[id]'
-      views: never
+      routes:
+        | '/instances/[id]'
+      views:
+        | never
     }
     'src/pages/instances/new.vue': {
-      routes: '/instances/new'
-      views: never
+      routes:
+        | '/instances/new'
+      views:
+        | never
     }
     'src/pages/members.vue': {
-      routes: '/members'
-      views: never
+      routes:
+        | '/members'
+      views:
+        | never
     }
     'src/pages/networks.vue': {
-      routes: '/networks'
-      views: never
+      routes:
+        | '/networks'
+      views:
+        | never
     }
     'src/pages/usage.vue': {
-      routes: '/usage'
-      views: never
+      routes:
+        | '/usage'
+      views:
+        | never
     }
   }
 
@@ -117,7 +182,9 @@ declare module 'vue-router/auto-routes' {
    * @internal
    */
   export type _RouteNamesForFilePath<FilePath extends string> =
-    _RouteFileInfoMap extends Record<FilePath, infer Info> ? Info['routes'] : keyof RouteNamedMap
+    _RouteFileInfoMap extends Record<FilePath, infer Info>
+      ? Info['routes']
+      : keyof RouteNamedMap
 }
 
 export {}

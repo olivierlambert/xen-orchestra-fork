@@ -206,14 +206,14 @@
         <template #description>Inbound rules applied by the router, evaluated top to bottom.</template>
       </UiCardTitle>
       <TabList>
-        <TabItem
+        <UiTabItem
           v-for="network of store.networks"
           :key="network.id"
           :active="firewallNetworkId === network.id"
           @click="firewallNetworkId = network.id"
         >
           {{ network.name }}
-        </TabItem>
+        </UiTabItem>
       </TabList>
       <VtsTable
         :state="
@@ -288,8 +288,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import PreviewNotice from '@/components/PreviewNotice.vue'
 import type { FirewallRule, Protocol } from '@/mock/types.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
-import TabItem from '@core/components/tab/TabItem.vue'
-import TabList from '@core/components/tab/TabList.vue'
+import TabList from '@core/components/tab-list/TabList.vue'
 import VtsHeaderCell from '@core/components/table/cells/VtsHeaderCell.vue'
 import VtsLinkCell from '@core/components/table/cells/VtsLinkCell.vue'
 import VtsStatusCell from '@core/components/table/cells/VtsStatusCell.vue'
@@ -301,6 +300,7 @@ import UiCard from '@core/components/ui/card/UiCard.vue'
 import UiCardTitle from '@core/components/ui/card-title/UiCardTitle.vue'
 import UiInfo from '@core/components/ui/info/UiInfo.vue'
 import UiInput from '@core/components/ui/input/UiInput.vue'
+import UiTabItem from '@core/components/ui/tab-item/UiTabItem.vue'
 import UiTableCell from '@core/components/ui/table-cell/UiTableCell.vue'
 import UiTag from '@core/components/ui/tag/UiTag.vue'
 import { computed, reactive, ref, watch } from 'vue'

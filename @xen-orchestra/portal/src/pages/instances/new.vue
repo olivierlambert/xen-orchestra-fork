@@ -30,14 +30,14 @@
             </template>
           </UiCardTitle>
           <TabList>
-            <TabItem
+            <UiTabItem
               v-for="family of families"
               :key="family.id"
               :active="selectedFamily === family.id"
               @click="selectedFamily = family.id"
             >
               {{ family.label }}
-            </TabItem>
+            </UiTabItem>
           </TabList>
           <div class="grid">
             <SelectCard
@@ -168,14 +168,14 @@ import type { Offering } from '@/mock/types.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
 import { formatHourlyPrice, formatMoney, formatMonthlyPrice } from '@/utils/format.ts'
 import VtsStateHero from '@core/components/state-hero/VtsStateHero.vue'
-import TabItem from '@core/components/tab/TabItem.vue'
-import TabList from '@core/components/tab/TabList.vue'
+import TabList from '@core/components/tab-list/TabList.vue'
 import UiButton from '@core/components/ui/button/UiButton.vue'
 import UiCard from '@core/components/ui/card/UiCard.vue'
 import UiCardTitle from '@core/components/ui/card-title/UiCardTitle.vue'
 import UiCheckbox from '@core/components/ui/checkbox/UiCheckbox.vue'
 import UiInfo from '@core/components/ui/info/UiInfo.vue'
 import UiInput from '@core/components/ui/input/UiInput.vue'
+import UiTabItem from '@core/components/ui/tab-item/UiTabItem.vue'
 import UiTag from '@core/components/ui/tag/UiTag.vue'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'

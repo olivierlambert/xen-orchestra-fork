@@ -87,7 +87,7 @@ const CATEGORIES: Record<UsageCategory, { label: string; accent: LegendItemAccen
   compute: { label: 'Compute', accent: 'info' },
   storage: { label: 'Storage', accent: 'success' },
   snapshots: { label: 'Snapshots', accent: 'warning' },
-  backups: { label: 'Backups', accent: 'neutral' },
+  backups: { label: 'Backups', accent: 'secondary' },
   'floating-ips': { label: 'Public IPs', accent: 'muted' },
 }
 

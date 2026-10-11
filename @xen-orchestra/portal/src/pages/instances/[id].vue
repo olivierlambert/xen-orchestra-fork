@@ -46,9 +46,9 @@
       </template>
     </PageHeader>
     <TabList>
-      <TabItem v-for="item of tabs" :key="item.id" :active="tab === item.id" @click="tab = item.id">
+      <UiTabItem v-for="item of tabs" :key="item.id" :active="tab === item.id" @click="tab = item.id">
         {{ item.label }}
-      </TabItem>
+      </UiTabItem>
     </TabList>
 
     <PageContent>
@@ -287,8 +287,7 @@ import { usePortalStore } from '@/stores/portal.store.ts'
 import { formatDate, formatHourlyPrice } from '@/utils/format.ts'
 import VtsRemoteConsole from '@core/components/console/VtsRemoteConsole.vue'
 import VtsStateHero from '@core/components/state-hero/VtsStateHero.vue'
-import TabItem from '@core/components/tab/TabItem.vue'
-import TabList from '@core/components/tab/TabList.vue'
+import TabList from '@core/components/tab-list/TabList.vue'
 import VtsHeaderCell from '@core/components/table/cells/VtsHeaderCell.vue'
 import VtsTextCell from '@core/components/table/cells/VtsTextCell.vue'
 import VtsRow from '@core/components/table/VtsRow.vue'
@@ -298,6 +297,7 @@ import UiCard from '@core/components/ui/card/UiCard.vue'
 import UiCardTitle from '@core/components/ui/card-title/UiCardTitle.vue'
 import UiInfo from '@core/components/ui/info/UiInfo.vue'
 import UiInput from '@core/components/ui/input/UiInput.vue'
+import UiTabItem from '@core/components/ui/tab-item/UiTabItem.vue'
 import UiTableCell from '@core/components/ui/table-cell/UiTableCell.vue'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'

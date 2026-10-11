@@ -1,4 +1,4 @@
-import i18n from '@core/i18n'
+import i18n from '@core/i18n.ts'
 import { createPinia } from 'pinia'
 import { createApp } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'

@@ -105,6 +105,50 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/admin/cloud': RouteRecordInfo<
+      '/admin/cloud',
+      '/admin/cloud',
+      Record<never, never>,
+      Record<never, never>,
+      | '/admin/cloud/ip-pools'
+      | '/admin/cloud/offerings'
+      | '/admin/cloud/organizations'
+    >,
+    '/admin/cloud/ip-pools': RouteRecordInfo<
+      '/admin/cloud/ip-pools',
+      '/admin/cloud/ip-pools',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/admin/cloud/offerings': RouteRecordInfo<
+      '/admin/cloud/offerings',
+      '/admin/cloud/offerings',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/admin/cloud/organizations': RouteRecordInfo<
+      '/admin/cloud/organizations',
+      '/admin/cloud/organizations',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
+    '/admin/cloud-project/[id]': RouteRecordInfo<
+      '/admin/cloud-project/[id]',
+      '/admin/cloud-project/:id',
+      { id: ParamValue<true> },
+      { id: ParamValue<false> },
+      | never
+    >,
+    '/admin/cloud-project/new': RouteRecordInfo<
+      '/admin/cloud-project/new',
+      '/admin/cloud-project/new',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/admin/user-management': RouteRecordInfo<
       '/admin/user-management',
       '/admin/user-management',
@@ -571,6 +615,45 @@ declare module 'vue-router/auto-routes' {
     'src/pages/admin/backup-and-replication/backup-repositories.vue': {
       routes:
         | '/admin/backup-and-replication/backup-repositories'
+      views:
+        | never
+    }
+    'src/pages/admin/cloud.vue': {
+      routes:
+        | '/admin/cloud'
+        | '/admin/cloud/ip-pools'
+        | '/admin/cloud/offerings'
+        | '/admin/cloud/organizations'
+      views:
+        | 'default'
+    }
+    'src/pages/admin/cloud/ip-pools.vue': {
+      routes:
+        | '/admin/cloud/ip-pools'
+      views:
+        | never
+    }
+    'src/pages/admin/cloud/offerings.vue': {
+      routes:
+        | '/admin/cloud/offerings'
+      views:
+        | never
+    }
+    'src/pages/admin/cloud/organizations.vue': {
+      routes:
+        | '/admin/cloud/organizations'
+      views:
+        | never
+    }
+    'src/pages/admin/cloud-project/[id].vue': {
+      routes:
+        | '/admin/cloud-project/[id]'
+      views:
+        | never
+    }
+    'src/pages/admin/cloud-project/new.vue': {
+      routes:
+        | '/admin/cloud-project/new'
       views:
         | never
     }
