@@ -12,6 +12,8 @@ type PortalConfig = {
   /** brand color, CSS value */
   color?: string
   currency: string
+  /** default of the organizations without their own billing mode */
+  billing: 'billing' | 'showback' | 'none'
   prices: {
     storagePerGiBMonth: number
     snapshotPerGiBMonth: number
@@ -22,6 +24,7 @@ type PortalConfig = {
 const DEFAULT_CONFIG: PortalConfig = {
   name: 'Cloud',
   currency: 'EUR',
+  billing: 'billing',
   prices: { storagePerGiBMonth: 0, snapshotPerGiBMonth: 0, ipPerHour: 0 },
 }
 
@@ -55,6 +58,9 @@ export class PortalConfigController extends Controller {
       supportUrl: config?.supportUrl,
       color: config?.color,
       currency: config?.currency ?? DEFAULT_CONFIG.currency,
+      billing: ['billing', 'showback', 'none'].includes(config?.billing as string)
+        ? (config!.billing as PortalConfig['billing'])
+        : DEFAULT_CONFIG.billing,
       prices: {
         storagePerGiBMonth: config?.prices?.storagePerGiBMonth ?? DEFAULT_CONFIG.prices.storagePerGiBMonth,
         snapshotPerGiBMonth: config?.prices?.snapshotPerGiBMonth ?? DEFAULT_CONFIG.prices.snapshotPerGiBMonth,

@@ -9,6 +9,7 @@ import type {
   XoConfigBackupArchive,
   XoGroup,
   XoHost,
+  XoBillingMode,
   XoOffering,
   XoOrganization,
   XoOrganizationRole,
@@ -282,7 +283,7 @@ export type XoApp = {
   getOffering(id: string): Promise<XoOffering>
   getOfferings(): Promise<XoOffering[]>
   updateOffering(id: string, props: Partial<Omit<XoOffering, 'id'>>): Promise<XoOffering>
-  createOrganization(params: { name: string }): Promise<XoOrganization>
+  createOrganization(params: { name: string; billing?: XoBillingMode; costCenter?: string }): Promise<XoOrganization>
   createOrganizationUser(
     id: XoOrganization['id'],
     params: { name: string; password: string; role?: XoOrganizationRole }
@@ -306,7 +307,10 @@ export type XoApp = {
   getUserProjects(userId: XoUser['id']): Promise<{ project: XoProject; role: XoProjectRole }[]>
   setOrganizationMember(id: XoOrganization['id'], userId: XoUser['id'], role: XoOrganizationRole | null): Promise<void>
   setProjectMember(id: XoProject['id'], userId: XoUser['id'], role: XoProjectRole | null): Promise<void>
-  updateOrganization(id: XoOrganization['id'], props: { name?: string }): Promise<XoOrganization>
+  updateOrganization(
+    id: XoOrganization['id'],
+    props: { name?: string; billing?: XoBillingMode | null; costCenter?: string | null }
+  ): Promise<XoOrganization>
   updateProject(
     id: XoProject['id'],
     props: {
@@ -334,9 +338,15 @@ export type XoApp = {
   revokeUserTokens(userId: XoUser['id']): Promise<void>
   checkUserPassword(userId: XoUser['id'], password: string, updateIfNecessary?: boolean): Promise<boolean>
   generateMacAddress(): string
-  getProjectBackupPolicies(
-    projectId: XoProject['id']
-  ): Promise<{ id: string; name: string; tag: string; remotes: string[] }[]>
+  getProjectBackupPolicies(projectId: XoProject['id']): Promise<
+    {
+      id: string
+      name: string
+      tag: string
+      remotes: string[]
+      schedules: { cron: string; timezone?: string; enabled: boolean; retention: number }[]
+    }[]
+  >
   getInstanceBackupPolicy(projectId: XoProject['id'], vmId: XoVm['id']): Promise<string | undefined>
   setInstanceBackupPolicy(projectId: XoProject['id'], vmId: XoVm['id'], policyId: string | null): Promise<void>
   listProjectRestorePoints(projectId: XoProject['id'], opts?: { vmId?: string }): Promise<XoProjectRestorePoint[]>

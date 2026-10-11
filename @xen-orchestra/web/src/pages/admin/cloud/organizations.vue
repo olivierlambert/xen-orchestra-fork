@@ -113,6 +113,35 @@
       </UiCard>
 
       <UiCard>
+        <UiTitle>{{ t('cloud:billing') }}</UiTitle>
+        <div class="inline-form">
+          <VtsInputWrapper :label="t('cloud:billing-mode')">
+            <CloudSelect v-model="billing.mode">
+              <option value="">{{ t('cloud:billing-default') }}</option>
+              <option value="billing">{{ t('cloud:billing-billing') }}</option>
+              <option value="showback">{{ t('cloud:billing-showback') }}</option>
+              <option value="none">{{ t('cloud:billing-none') }}</option>
+            </CloudSelect>
+          </VtsInputWrapper>
+          <VtsInputWrapper :label="t('cloud:cost-center')">
+            <UiInput v-model="billing.costCenter" accent="brand" />
+          </VtsInputWrapper>
+          <UiButton
+            variant="secondary"
+            accent="brand"
+            size="medium"
+            left-icon="fa:floppy-disk"
+            :busy="action.isRunning.value"
+            :disabled="!billingChanged"
+            @click="saveBilling()"
+          >
+            {{ t('action:save') }}
+          </UiButton>
+        </div>
+        <UiInfo accent="info" wrap>{{ t('cloud:billing-description') }}</UiInfo>
+      </UiCard>
+
+      <UiCard>
         <UiTitle>
           {{ t('cloud:projects') }}
           <template #action>
@@ -237,6 +266,7 @@ import {
   QUOTA_KEYS,
   type CloudMember,
   type CloudOrganizationRole,
+  type CloudBillingMode,
   type CloudProjectDetails,
 } from '@/modules/cloud/cloud.api.ts'
 import CloudSelect from '@/modules/cloud/components/CloudSelect.vue'
@@ -323,6 +353,35 @@ async function createOrganization() {
     await reload()
     selectedId.value = created.id
   }
+}
+
+// billing mode of the organization, the default of the configuration when empty
+const billing = reactive<{ mode: string; costCenter: string | number | undefined }>({ mode: '', costCenter: '' })
+watch(
+  selected,
+  organization => {
+    billing.mode = organization?.billing ?? ''
+    billing.costCenter = organization?.costCenter ?? ''
+  },
+  { immediate: true }
+)
+const billingChanged = computed(
+  () =>
+    selected.value !== undefined &&
+    (billing.mode !== (selected.value.billing ?? '') ||
+      String(billing.costCenter ?? '').trim() !== (selected.value.costCenter ?? ''))
+)
+
+async function saveBilling() {
+  const organization = selected.value!
+  const costCenter = String(billing.costCenter ?? '').trim()
+  await action.run(() =>
+    cloudApi.updateOrganization(organization.id, {
+      billing: billing.mode === '' ? null : (billing.mode as CloudBillingMode),
+      costCenter: costCenter === '' ? null : costCenter,
+    })
+  )
+  await reload()
 }
 
 const suspensionReason = ref<string | number | undefined>('')

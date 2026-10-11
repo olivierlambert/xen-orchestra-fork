@@ -46,7 +46,10 @@ import {
  *   members: Record<string, OrganizationRole>,
  *   adminGroupId: string,
  *   suspended?: { at: number, reason: string, projectMembers: Record<string, Record<string, ProjectRole>> },
+ *   billing?: BillingMode,
+ *   costCenter?: string,
  * }} Organization
+ * @typedef {'billing' | 'showback' | 'none'} BillingMode
  * @typedef {{
  *   id: string,
  *   organizationId: string,
@@ -116,6 +119,23 @@ function normalizeScope(scope = {}) {
  * organization, to which the admin role of every project of the organization is attached. Ownership is recorded by XO in the objects `other_config` when
  * they are created through the project, and cannot be changed by tenants.
  */
+const BILLING_MODES = new Set(['billing', 'showback', 'none'])
+
+/**
+ * How an organization sees its consumption: invoiced (`billing`), internal costs not invoiced (`showback`), or
+ * resources only (`none`, internal entities without any cost)
+ *
+ * @param {{ billing?: string | null, costCenter?: string | null }} props
+ */
+function assertBillingProps({ billing, costCenter }) {
+  if (billing != null && !BILLING_MODES.has(billing)) {
+    throw invalidParameters(`billing must be one of ${[...BILLING_MODES].join(', ')}`)
+  }
+  if (costCenter != null && (typeof costCenter !== 'string' || costCenter.length > 64)) {
+    throw invalidParameters('the cost center must be a string of at most 64 characters')
+  }
+}
+
 export default class Projects_ {
   /** @type {Organizations} */
   // @ts-ignore initialized in core-started
@@ -189,11 +209,17 @@ export default class Projects_ {
   // === Organization
 
   /**
-   * @param {{ name: string }} params
+   * @param {{ name: string, billing?: BillingMode, costCenter?: string }} params
    * @returns {Promise<Organization>}
    */
-  async createOrganization({ name }) {
-    const organization = await this.#organizations.add({ name, members: {} })
+  async createOrganization({ name, billing, costCenter }) {
+    assertBillingProps({ billing, costCenter })
+    const organization = await this.#organizations.add({
+      name,
+      members: {},
+      ...(billing !== undefined && { billing }),
+      ...(costCenter !== undefined && costCenter !== '' && { costCenter }),
+    })
     try {
       const group = await this._app.createGroup({ name: adminGroupName(organization) })
       organization.adminGroupId = group.id
@@ -222,15 +248,28 @@ export default class Projects_ {
   }
 
   /**
+   * `billing` and `costCenter` are removed with `null`: the organization then follows `portal.billing`.
+   *
    * @param {string} id
-   * @param {{ name?: string }} props
+   * @param {{ name?: string, billing?: BillingMode | null, costCenter?: string | null }} props
    */
-  updateOrganization(id, { name }) {
+  updateOrganization(id, { name, billing, costCenter }) {
+    assertBillingProps({ billing, costCenter })
     return this.#withOrganizationLock(id, async () => {
       const organization = await this.getOrganization(id)
       if (name !== undefined) {
         organization.name = name
         await this._app.updateGroup(organization.adminGroupId, { name: adminGroupName(organization) })
+      }
+      if (billing === null) {
+        delete organization.billing
+      } else if (billing !== undefined) {
+        organization.billing = billing
+      }
+      if (costCenter === null || costCenter === '') {
+        delete organization.costCenter
+      } else if (costCenter !== undefined) {
+        organization.costCenter = costCenter
       }
       return this.#organizations.update(organization)
     })

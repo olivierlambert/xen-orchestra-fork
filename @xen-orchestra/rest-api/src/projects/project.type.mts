@@ -53,6 +53,12 @@ export type ProjectResource = {
   poolId: string
 }
 
+export type ProjectNetwork = ProjectResource & {
+  description: string
+  /** instances on this network get an address from an IP pool of the project */
+  publicIpv4: boolean
+}
+
 export type ProjectTemplate = ProjectResource & {
   /** to pass to `create_vm` */
   uuid: string
@@ -73,10 +79,24 @@ export type ProjectDetails = ProjectWithRole & {
   resources: {
     pools: { id: string; name: string }[]
     templates: ProjectTemplate[]
-    networks: ProjectResource[]
+    networks: ProjectNetwork[]
     srs: (ProjectResource & { size: number; usage: number })[]
     offerings: Offering[]
   }
+}
+
+export type ProjectBackupPolicy = {
+  id: string
+  name: string
+  /** instances carrying this tag are backed up by the policy */
+  tag: string
+  /** enabled schedules only */
+  schedules: {
+    cron: string
+    timezone?: string
+    /** restore points kept */
+    retention: number
+  }[]
 }
 
 export type ProjectMember = {

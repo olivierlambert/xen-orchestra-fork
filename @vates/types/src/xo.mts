@@ -730,7 +730,18 @@ export type XoOrganization = {
   members: Record<XoUser['id'], XoOrganizationRole>
   /** XO group of the organization admins, the admin role of every project is attached to it */
   adminGroupId: XoGroup['id']
+  /** how the organization sees its consumption, `portal.billing` of the configuration when missing */
+  billing?: XoBillingMode
+  /** reference of the organization for the finance department (chargeback exports) */
+  costCenter?: string
 }
+
+/**
+ * - `billing`: consumption is invoiced by the provider
+ * - `showback`: internal costs are shown, not invoiced
+ * - `none`: resources only, no cost (internal entities)
+ */
+export type XoBillingMode = 'billing' | 'showback' | 'none'
 
 export type XoProjectRole = 'viewer' | 'member' | 'admin'
 

@@ -1,4 +1,4 @@
-import type { XoOrganization, XoOrganizationRole, XoUser } from '@vates/types'
+import type { XoBillingMode, XoOrganization, XoOrganizationRole, XoUser } from '@vates/types'
 import { json } from 'express'
 import { inject } from 'inversify'
 import { provide } from 'inversify-binding-decorators'
@@ -78,7 +78,9 @@ export class OrganizationController extends Controller {
   @Post('')
   @Middlewares(json())
   @SuccessResponse(createdResp.status, createdResp.description)
-  async createOrganization(@Body() body: { name: string }): Promise<{ id: Unbrand<XoOrganization>['id'] }> {
+  async createOrganization(
+    @Body() body: { name: string; billing?: XoBillingMode; costCenter?: string }
+  ): Promise<{ id: Unbrand<XoOrganization>['id'] }> {
     const { id } = await this.#restApi.xoApp.createOrganization(body)
     this.setStatus(createdResp.status)
     return { id }
@@ -98,14 +100,18 @@ export class OrganizationController extends Controller {
   }
 
   /**
-   * Administrators only.
+   * Administrators only. `null` removes the billing mode (the default of the configuration applies) or the cost
+   * center.
    */
   @Extension('x-mcp-exposure', 'confirm')
   @Patch('{id}')
   @Middlewares(json())
   @SuccessResponse(noContentResp.status, noContentResp.description)
   @Response(notFoundResp.status, notFoundResp.description)
-  async updateOrganization(@Path() id: string, @Body() body: { name?: string }): Promise<void> {
+  async updateOrganization(
+    @Path() id: string,
+    @Body() body: { name?: string; billing?: XoBillingMode | null; costCenter?: string | null }
+  ): Promise<void> {
     await this.#restApi.xoApp.updateOrganization(id as XoOrganization['id'], body)
   }
 

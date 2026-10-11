@@ -322,6 +322,7 @@ export default class ProjectServices {
   async getProjectBackupPolicies(projectId) {
     const app = this._app
     const { scope } = await app.getProject(projectId)
+    const schedules = await app.getAllSchedules()
     const policies = []
     for (const jobId of scope.backupJobs) {
       try {
@@ -332,7 +333,24 @@ export default class ProjectServices {
           log.warn('backup job of a project does not select VMs by tag', { jobId, projectId })
           continue
         }
-        policies.push({ id: job.id, name: job.name, tag, remotes: unboxIdsFromPattern(job.remotes) })
+        policies.push({
+          id: job.id,
+          name: job.name,
+          tag,
+          remotes: unboxIdsFromPattern(job.remotes),
+          // what the tenant needs to choose: when it runs and how many restore points it keeps
+          schedules: schedules
+            .filter(schedule => schedule.jobId === job.id)
+            .map(schedule => {
+              const settings = job.settings?.[schedule.id] ?? {}
+              return {
+                cron: schedule.cron,
+                timezone: schedule.timezone,
+                enabled: schedule.enabled,
+                retention: settings.exportRetention ?? settings.copyRetention ?? settings.snapshotRetention ?? 0,
+              }
+            }),
+        })
       } catch (error) {
         log.warn('backup job of a project not found', { jobId, projectId, error })
       }

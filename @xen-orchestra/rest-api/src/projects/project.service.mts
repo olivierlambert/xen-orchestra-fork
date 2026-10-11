@@ -10,6 +10,7 @@ import type {
   XoUser,
   XoVbd,
   XoVdi,
+  XoVdiSnapshot,
   XoVif,
   XoVm,
   XoVmTemplate,
@@ -24,7 +25,7 @@ import type {
   ProjectMember,
   ProjectTemplate,
   ProjectWithRole,
-  ProjectResource,
+  ProjectNetwork,
 } from './project.type.mjs'
 
 export class ProjectService {
@@ -70,6 +71,18 @@ export class ProjectService {
         }
       })
 
+    // networks covered by an IP pool of the project: instances get a public address there
+    const publicNetworks = new Set<string>()
+    for (const poolId of scope.ipPools) {
+      try {
+        for (const networkId of (await this.#xoApp.getIpPool(poolId)).networks ?? []) {
+          publicNetworks.add(networkId)
+        }
+      } catch {
+        // deleted IP pool
+      }
+    }
+
     return {
       pools: resolve<XoPool, { id: string; name: string }>(scope.pools, 'pool', pool => ({
         id: pool.id,
@@ -87,10 +100,12 @@ export class ProjectService {
           disks: Array.from(disks, ([userdevice, { size }]) => ({ userdevice, size })),
         }
       }),
-      networks: resolve<XoNetwork, ProjectResource>(scope.networks, 'network', network => ({
+      networks: resolve<XoNetwork, ProjectNetwork>(scope.networks, 'network', network => ({
         id: network.id,
         name: network.name_label,
+        description: network.name_description,
         poolId: network.$pool,
+        publicIpv4: publicNetworks.has(network.id),
       })),
       srs: resolve<XoSr, ProjectDetails['resources']['srs'][number]>(scope.srs, 'SR', sr => ({
         id: sr.id,
@@ -127,7 +142,8 @@ export class ProjectService {
     for (const vbdId of restApi.getObject<XoVmTemplate>(templateId, 'VM-template').$VBDs) {
       const vbd = restApi.getObject<XoVbd>(vbdId, 'VBD')
       if (!vbd.is_cd_drive && vbd.VDI !== undefined) {
-        const vdi = restApi.getObject<XoVdi>(vbd.VDI as XoVdi['id'], 'VDI')
+        // a template made from a snapshot keeps snapshot VDIs: they are cloned like regular ones
+        const vdi = restApi.getObject<XoVdi | XoVdiSnapshot>(vbd.VDI as XoVdi['id'], ['VDI', 'VDI-snapshot'])
         disks.set(vbd.position, { size: vdi.size, sr: vdi.$SR })
       }
     }

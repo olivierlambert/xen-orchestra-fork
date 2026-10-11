@@ -14,7 +14,11 @@ export type CloudOrganization = {
   members: Record<string, CloudOrganizationRole>
   adminGroupId: string
   suspended?: { at: number; reason: string }
+  billing?: CloudBillingMode
+  costCenter?: string
 }
+
+export type CloudBillingMode = 'billing' | 'showback' | 'none'
 
 export type CloudQuota = Partial<Record<'instances' | 'vcpus' | 'memory' | 'storage' | 'snapshots' | 'ips', number>>
 
@@ -82,6 +86,10 @@ export const cloudApi = {
   getOrganizations: () => fetchRequest<CloudOrganization[]>('organizations'),
   createOrganization: (name: string) => fetchPost<{ id: string }>('organizations', { name }),
   deleteOrganization: (id: string) => fetchDelete(`organizations/${id}`),
+  updateOrganization: (
+    id: string,
+    body: { name?: string; billing?: CloudBillingMode | null; costCenter?: string | null }
+  ) => fetchPatch(`organizations/${id}`, body),
   getMembers: (id: string) => fetchRequest<CloudMember[]>(`organizations/${id}/members`),
   createUser: (id: string, body: { name: string; password: string; role: CloudOrganizationRole }) =>
     fetchPost<{ id: string }>(`organizations/${id}/users`, body),

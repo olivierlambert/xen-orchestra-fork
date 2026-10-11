@@ -42,6 +42,7 @@ import { RestApi } from '../rest-api/rest-api.mjs'
 import { ProjectService } from './project.service.mjs'
 import type {
   CreateProjectBody,
+  ProjectBackupPolicy,
   ProjectCreateVmBody,
   ProjectDetails,
   ProjectMember,
@@ -249,14 +250,19 @@ export class ProjectController extends Controller {
   @Get('{id}/backup-policies')
   @Security('*', ['acl'])
   @Response(forbiddenOperationResp.status, forbiddenOperationResp.description)
-  async getBackupPolicies(@Path() id: string): Promise<{ id: string; name: string; tag: string }[]> {
+  async getBackupPolicies(@Path() id: string): Promise<ProjectBackupPolicy[]> {
     await this.#restApi.xoApp.assertProjectRole(this.#user, id as XoProject['id'], 'viewer')
-    // the tag tells which instances are subscribed, from their tags
-    return (await this.#restApi.xoApp.getProjectBackupPolicies(id as XoProject['id'])).map(({ id, name, tag }) => ({
-      id,
-      name,
-      tag,
-    }))
+    // the tag tells which instances are subscribed, from their tags; the remotes stay private to the provider
+    return (await this.#restApi.xoApp.getProjectBackupPolicies(id as XoProject['id'])).map(
+      ({ id, name, tag, schedules }) => ({
+        id,
+        name,
+        tag,
+        schedules: schedules
+          .filter(_ => _.enabled)
+          .map(({ cron, timezone, retention }) => ({ cron, timezone, retention })),
+      })
+    )
   }
 
   /**
