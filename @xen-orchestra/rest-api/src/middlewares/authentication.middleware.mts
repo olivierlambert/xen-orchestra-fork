@@ -50,30 +50,37 @@ export function setupApiContext(xoApp: XoApp) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const { cookies, headers, ip, query } = req
     const { authorization } = headers
-    const token = cookies.authenticationToken ?? cookies.token
 
-    const hasToken = Boolean(token)
-    const hasBasic = Boolean(authorization)
-
-    if (hasToken && hasBasic) {
-      return next(new ApiError('Having multiple authentication methods is not supported, please choose one', 400))
+    // An explicit `Authorization` header wins over the cookies: the session cookie of another application served
+    // on the same address (XO 6 and the tenant portal) must not make the request fail, and other sites can make a
+    // browser send cookies but not headers. `Bearer` carries an authentication token, any other scheme is Basic.
+    let token: string | undefined
+    let basic: string | undefined
+    if (authorization !== undefined) {
+      const [scheme, value] = authorization.split(' ')
+      if (value === undefined) {
+        return next(new ApiError('Malformed Authorization header', 400))
+      }
+      if (scheme.toLowerCase() === 'bearer') {
+        token = value
+      } else {
+        basic = value
+      }
+    } else {
+      token = cookies.authenticationToken ?? cookies.token
     }
 
-    if (!hasToken && !hasBasic) {
+    if (!token && basic === undefined) {
       return xoApp.runWithApiContext(undefined, next)
     }
 
+    const hasToken = Boolean(token)
     const credentials = {}
     if (hasToken) {
       Object.assign(credentials, { token })
       res.locals.authType = 'token'
     } else {
-      const [, encoded] = authorization!.split(' ')
-      if (encoded === undefined) {
-        return next(new ApiError('Malformed Authorization header', 400))
-      }
-
-      const [username, password] = Buffer.from(encoded, 'base64').toString().split(':')
+      const [username, password] = Buffer.from(basic!, 'base64').toString().split(':')
       Object.assign(credentials, { username, password, otp: query.otp })
       res.locals.authType = 'basic'
     }

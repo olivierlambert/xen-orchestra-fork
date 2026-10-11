@@ -1,9 +1,37 @@
 // Minimal client for the XO REST API, reached on the same origin (proxied by vite in development).
+//
+// The session token travels in the `Authorization` header, never in the cookies of XO: XO 5 and XO 6 may be served
+// on the same address, a portal session must not replace the session of an administrator (and the other way round).
 
 const BASE_URL = '/rest/v0'
-const TOKEN_COOKIE = 'authenticationToken'
-// the console proxy of xo-server only reads the `token` cookie
-const CONSOLE_TOKEN_COOKIE = 'token'
+const SESSION_KEY = 'xo-portal-session'
+// the console proxy of xo-server only reads the `token` cookie: set for the consoles path while a console is open
+const CONSOLE_COOKIE = 'token'
+const CONSOLE_PATH = '/api/consoles/'
+
+function readSession(): string | undefined {
+  try {
+    return localStorage.getItem(SESSION_KEY) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+let memorySession = readSession()
+const sessionToken = () => memorySession ?? readSession()
+
+function writeSession(token: string | undefined) {
+  try {
+    if (token === undefined) {
+      localStorage.removeItem(SESSION_KEY)
+    } else {
+      localStorage.setItem(SESSION_KEY, token)
+    }
+  } catch {
+    // storage unavailable (private mode of some browsers): the session lasts as long as the page
+  }
+  memorySession = token
+}
 
 export class XoApiError extends Error {
   constructor(
@@ -26,10 +54,12 @@ async function request<T>(
       accept: 'application/json',
       'x-requested-with': 'XMLHttpRequest',
       ...(body !== undefined && { 'content-type': 'application/json' }),
+      ...(sessionToken() !== undefined && { authorization: `Bearer ${sessionToken()}` }),
       ...headers,
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
-    credentials: 'same-origin',
+    // the cookies of XO are ignored by the server when the header is present, they are not needed at all
+    credentials: 'omit',
   })
 
   const isJson = response.headers.get('content-type')?.includes('application/json') ?? false
@@ -59,10 +89,12 @@ export const xo = {
 export const projectFilter = (projectId: string) =>
   encodeURIComponent(`$project:/^${projectId.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$/`)
 
-/** Drops the session cookies, e.g. a token expired or revoked: XO refuses a request carrying both a token and a password */
+export const hasSession = () => sessionToken() !== undefined
+
+/** Forgets the session, e.g. a token expired or revoked */
 export function clearSession() {
-  setCookie(TOKEN_COOKIE, '', 0)
-  setCookie(CONSOLE_TOKEN_COOKIE, '', 0)
+  writeSession(undefined)
+  setConsoleCookie(undefined)
 }
 
 /** `crypto.randomUUID` only exists in secure contexts (HTTPS or localhost), not on a plain HTTP address */
@@ -85,34 +117,121 @@ export async function login(username: string, password: string) {
       headers: { authorization: `Basic ${btoa(`${username}:${password}`)}` },
     }
   )
-  setCookie(TOKEN_COOKIE, token.id, 86400)
-  setCookie(CONSOLE_TOKEN_COOKIE, token.id, 86400)
+  writeSession(token.id)
 }
 
-/** Revokes the session token, not only the cookies */
+/** Revokes the session token, not only the local session */
 export async function logout() {
-  const token = getCookies()[TOKEN_COOKIE]
+  const token = sessionToken()
   if (token !== undefined) {
-    await request('DELETE', `/account/tokens/${encodeURIComponent(decodeURIComponent(token).slice(0, 8))}`).catch(
-      () => {}
-    )
+    await request('DELETE', `/account/tokens/${encodeURIComponent(token.slice(0, 8))}`).catch(() => {})
   }
   clearSession()
 }
 
-function getCookies(): Record<string, string> {
-  return Object.fromEntries(document.cookie.split('; ').map(cookie => cookie.split('=')))
-}
-
-function setCookie(name: string, value: string, maxAge: number) {
+function setConsoleCookie(token: string | undefined) {
   const secure = location.protocol === 'https:' ? '; Secure' : ''
-  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; SameSite=Strict; max-age=${maxAge}${secure}`
+  document.cookie = `${CONSOLE_COOKIE}=${encodeURIComponent(token ?? '')}; path=${CONSOLE_PATH}; SameSite=Strict; max-age=${
+    token === undefined ? 0 : 3600
+  }${secure}`
 }
 
-/** For sessions opened before the console cookie existed */
-export function ensureConsoleCookie() {
-  const cookies = getCookies()
-  if (cookies[TOKEN_COOKIE] !== undefined && cookies[CONSOLE_TOKEN_COOKIE] === undefined) {
-    setCookie(CONSOLE_TOKEN_COOKIE, decodeURIComponent(cookies[TOKEN_COOKIE]), 86400)
+/**
+ * Lets the console proxy authenticate the session while a console is open; returns the function closing it.
+ *
+ * Limited to the consoles path, and more specific than a `token` cookie of XO for the whole site, which the browser
+ * sends after it.
+ */
+export function openConsoleSession(): () => void {
+  setConsoleCookie(sessionToken())
+  return () => setConsoleCookie(undefined)
+}
+
+/**
+ * The previous versions of the portal kept their session in the cookies of XO, for the whole site. Removes them once
+ * when they belong to a tenant account, never the session of an administrator of XO.
+ */
+export async function dropLegacySessionCookies() {
+  if (!/(^|; )(authenticationToken|token)=/.test(document.cookie)) {
+    return
+  }
+  try {
+    const response = await fetch(`${BASE_URL}/account`, {
+      headers: { accept: 'application/json', 'x-requested-with': 'XMLHttpRequest' },
+      credentials: 'same-origin',
+    })
+    const account = response.ok ? await response.json() : undefined
+    if (account !== undefined && account.isAdmin) {
+      return
+    }
+  } catch {
+    return
+  }
+  for (const name of ['authenticationToken', 'token']) {
+    document.cookie = `${name}=; path=/; max-age=0`
+  }
+}
+
+/**
+ * Server-sent events of XO with the session header (`EventSource` cannot send headers). Reconnects until `close()`.
+ */
+export function subscribeEvents(listeners: Record<string, (data: string) => void>): { close(): void } {
+  let closed = false
+  let controller: AbortController | undefined
+
+  async function connect() {
+    for (;;) {
+      if (closed) {
+        return
+      }
+      controller = new AbortController()
+      try {
+        const response = await fetch(`${BASE_URL}/events`, {
+          headers: { accept: 'text/event-stream', authorization: `Bearer ${sessionToken()}` },
+          credentials: 'omit',
+          signal: controller.signal,
+        })
+        if (!response.ok || response.body === null) {
+          throw new Error(`events: HTTP ${response.status}`)
+        }
+        const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
+        let buffer = ''
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) {
+            break
+          }
+          buffer += value
+          let end
+          while ((end = buffer.indexOf('\n\n')) !== -1) {
+            const chunk = buffer.slice(0, end)
+            buffer = buffer.slice(end + 2)
+            let type = 'message'
+            const data: string[] = []
+            for (const line of chunk.split('\n')) {
+              if (line.startsWith('event:')) {
+                type = line.slice(6).trim()
+              } else if (line.startsWith('data:')) {
+                data.push(line.slice(5).trimStart())
+              }
+            }
+            listeners[type]?.(data.join('\n'))
+          }
+        }
+      } catch {
+        // the polling of the store covers the gap
+      }
+      if (!closed) {
+        await new Promise(resolve => setTimeout(resolve, 5000))
+      }
+    }
+  }
+
+  connect()
+  return {
+    close() {
+      closed = true
+      controller?.abort()
+    },
   }
 }

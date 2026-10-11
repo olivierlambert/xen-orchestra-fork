@@ -563,6 +563,7 @@
 </template>
 
 <script lang="ts" setup>
+import { openConsoleSession } from '@/api/xo.ts'
 import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import CopyValue from '@/components/ui/CopyValue.vue'
@@ -604,7 +605,7 @@ import {
   faTrash,
   faTriangleExclamation,
 } from '@fortawesome/free-solid-svg-icons'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const store = usePortalStore()
@@ -686,6 +687,13 @@ const connectDescription = computed(() =>
     ? 'Reachable from the Internet on its public IPv4'
     : 'Reachable from the private network of the project'
 )
+
+// the console proxy authenticates with a cookie: it only exists while the console is shown
+watchEffect(onCleanup => {
+  if (store.isLive && tab.value === 'console' && instance.value?.state === 'running') {
+    onCleanup(openConsoleSession())
+  }
+})
 
 const consoleUrl = computed(
   () => new URL(`/api/consoles/${instance.value!.id}`, window.location.origin.replace(/^http/, 'ws'))

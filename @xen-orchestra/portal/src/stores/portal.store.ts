@@ -1,9 +1,10 @@
 import {
   clearSession,
-  ensureConsoleCookie,
+  dropLegacySessionCookies,
   login as xoLogin,
   logout as xoLogout,
   projectFilter,
+  subscribeEvents,
   xo,
   XoApiError,
 } from '@/api/xo.ts'
@@ -952,7 +953,7 @@ export const usePortalStore = defineStore('portal', () => {
   // events trigger refreshes, polling only covers a lost event stream
   useIntervalFn(refreshLive, 60e3)
 
-  let eventSource: EventSource | undefined
+  let events: { close(): void } | undefined
   let refreshTimer: ReturnType<typeof setTimeout> | undefined
   function scheduleRefresh() {
     clearTimeout(refreshTimer)
@@ -961,21 +962,22 @@ export const usePortalStore = defineStore('portal', () => {
 
   /** XO REST events (server-sent events), filtered by XO with the rights of the user */
   function connectEvents() {
-    eventSource?.close()
-    eventSource = new EventSource('/rest/v0/events')
-    eventSource.addEventListener('init', async event => {
-      const { id } = JSON.parse((event as MessageEvent).data)
-      for (const [collection, fields] of [
-        ['VM', ['id', 'name_label', 'power_state', 'tags', 'mainIpAddress', 'CPUs', 'memory', '$project']],
-        ['VM-snapshot', ['id', 'name_label', '$project']],
-        ['VIF', ['id', 'allowedIpv4Addresses', '$project']],
-      ] as const) {
-        await xo.post(`/events/${id}/subscriptions`, { collection, fields }).catch(() => {})
-      }
+    events?.close()
+    events = subscribeEvents({
+      init: async data => {
+        const { id } = JSON.parse(data)
+        for (const [collection, fields] of [
+          ['VM', ['id', 'name_label', 'power_state', 'tags', 'mainIpAddress', 'CPUs', 'memory', '$project']],
+          ['VM-snapshot', ['id', 'name_label', '$project']],
+          ['VIF', ['id', 'allowedIpv4Addresses', '$project']],
+        ] as const) {
+          await xo.post(`/events/${id}/subscriptions`, { collection, fields }).catch(() => {})
+        }
+      },
+      add: scheduleRefresh,
+      update: scheduleRefresh,
+      remove: scheduleRefresh,
     })
-    for (const type of ['add', 'update', 'remove']) {
-      eventSource.addEventListener(type, scheduleRefresh)
-    }
   }
 
   watch(currentProjectId, async () => {
@@ -999,7 +1001,6 @@ export const usePortalStore = defineStore('portal', () => {
   }
 
   async function loadSession() {
-    ensureConsoleCookie()
     account.value = await xo.get<XoAccount>('/account')
     currentUser.value = { id: account.value.id, name: account.value.name, isAdmin: account.value.isAdmin }
 
@@ -1024,12 +1025,13 @@ export const usePortalStore = defineStore('portal', () => {
    * Detects whether a Xen Orchestra is reachable on `/rest/v0`, and whether the user is signed in.
    */
   async function init() {
+    await dropLegacySessionCookies()
     try {
       await xo.get('/account')
     } catch (error) {
       if (error instanceof XoApiError && error.status === 401) {
         backend.value = 'xo'
-        // a stale session cookie would also be refused on the public routes
+        // an expired or revoked session
         clearSession()
         await loadProvider()
         status.value = 'login'
@@ -1051,7 +1053,7 @@ export const usePortalStore = defineStore('portal', () => {
   }
 
   async function logout() {
-    eventSource?.close()
+    events?.close()
     await xoLogout()
     status.value = 'login'
     liveProject.value = undefined

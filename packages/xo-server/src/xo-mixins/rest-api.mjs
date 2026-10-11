@@ -149,8 +149,10 @@ export default class RestApi {
   }
 
   async #authenticateUser(req) {
-    const { cookies, ip } = req
-    const token = cookies.authenticationToken ?? cookies.token
+    const { cookies, headers, ip } = req
+    // like the REST API: a `Bearer` token in the headers wins over the cookies
+    const [scheme, value] = headers.authorization?.split(' ') ?? []
+    const token = scheme?.toLowerCase() === 'bearer' ? value : (cookies.authenticationToken ?? cookies.token)
 
     if (!token) {
       throw invalidCredentials()
