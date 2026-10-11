@@ -22,8 +22,8 @@ Where the tenant model and the portal stand, and what comes after the MVP.
 - Project ownership on network interfaces and disk attachments, cleanup of deleted users
 
 Validated end to end on a lab pool (API suites and portal UI), including a real backup and restore, console,
-suspension and usage records. Not verified yet: the cloud-init configuration inside a guest (the lab has no image with an
-OS) and the live updates through events (the portal also polls every minute).
+suspension, usage records, live updates through events, and cloud-init on a Hub template (public IP configured in the
+guest, SSH key of the account). A security review of tenant isolation, accounts and quotas was addressed.
 
 ## Later
 
