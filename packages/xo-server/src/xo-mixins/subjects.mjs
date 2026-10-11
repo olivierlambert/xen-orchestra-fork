@@ -139,6 +139,8 @@ export default class {
       aclV2Roles.map(({ id: roleId }) => this._app.deleteAclV2UserRole(id, roleId, { bypassAuthorization: true }))
     )
 
+    await this._app.removeUserFromOrganizations(id)
+
     // Remove the user from all its groups.
     forEach(user.groups, groupId => {
       this.getGroup(groupId)

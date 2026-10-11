@@ -872,7 +872,10 @@ const setUpConsoleProxy = (webServer, xo, useForwardedHeaders) => {
         const remoteAddress = proxyAddr(req, useForwardedHeaders)
 
         const { user } = await xo.authenticateUser({ token }, { ip: remoteAddress })
-        if (!(await xo.hasPermissions(user.id, [[id, 'operate']]))) {
+        if (
+          !(await xo.hasPermissions(user.id, [[id, 'operate']])) &&
+          !(await xo.canUseConsoleThroughProject(user.id, id))
+        ) {
           throw invalidCredentials()
         }
 

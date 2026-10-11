@@ -44,7 +44,13 @@ export default function genericErrorHandler(error: unknown, req: Request, res: R
     statusCode = 403
   } else if (invalidCredentials.is(error)) {
     statusCode = 401
-    res.setHeader('WWW-Authenticate', 'Basic realm="xo"')
+    // browsers show their own login dialog on a Basic challenge: web apps with their own sign-in page (the
+    // portal) mark their requests to opt out
+    if (req.get('x-requested-with') !== 'XMLHttpRequest') {
+      res.setHeader('WWW-Authenticate', 'Basic realm="xo"')
+    }
+  } else if (error.message === 'too fast authentication tries') {
+    statusCode = 429
   } else if (objectAlreadyExists.is(error)) {
     statusCode = 409
   } else if (invalidParameters.is(error)) {

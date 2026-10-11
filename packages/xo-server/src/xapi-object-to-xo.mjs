@@ -833,6 +833,8 @@ const TRANSFORMS = {
       read_only: obj.mode === 'RO',
       VDI: link(obj, 'VDI'),
       VM: link(obj, 'VM'),
+
+      $project: obj.other_config[PROJECT_OTHER_CONFIG_KEY],
     }
   },
 
@@ -866,6 +868,7 @@ const TRANSFORMS = {
       })(),
 
       $network: link(obj, 'network'),
+      $project: obj.other_config[PROJECT_OTHER_CONFIG_KEY],
       $VM: link(obj, 'VM'),
     }
   },

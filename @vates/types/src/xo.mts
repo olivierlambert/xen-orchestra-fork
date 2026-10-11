@@ -734,6 +734,18 @@ export type XoOrganization = {
 
 export type XoProjectRole = 'viewer' | 'member' | 'admin'
 
+export type XoOffering = {
+  id: Branded<'offering'>
+  name: string
+  family: string
+  cpus: number
+  /** in bytes */
+  memory: number
+  /** system disk, in bytes */
+  disk: number
+  pricePerHour: number
+}
+
 export type XoProjectQuota = {
   instances?: number
   vcpus?: number
@@ -742,9 +754,53 @@ export type XoProjectQuota = {
   /** in bytes */
   storage?: number
   snapshots?: number
+  /** public IPs, allocated from the IP pools of the project */
+  ips?: number
 }
 
 export type XoProjectUsage = Required<XoProjectQuota>
+
+export type XoProjectUsageRecord = {
+  at: number
+  projectId: XoProject['id']
+  organizationId: XoOrganization['id']
+  usage: XoProjectUsage
+  vms: {
+    id: XoVm['id']
+    name: string
+    cpus: number
+    /** allocated, in bytes */
+    memory: number
+    /** virtual size of the disks, in bytes */
+    disk: number
+    powerState: string
+    ips: string[]
+  }[]
+  /** what the snapshot chains actually use on the storage, in bytes */
+  snapshotsPhysicalSize: number
+}
+
+export type XoProjectRestorePoint = {
+  id: string
+  vmId: string
+  vmName: string
+  timestamp: number
+  size: number
+  policyId: string
+  policyName: string
+}
+
+export type XoIpPool = {
+  id: string
+  name: string
+  /** address → VIFs using it */
+  addresses?: Record<string, { vifs?: string[] }>
+  networks?: XoNetwork['id'][]
+  resourceSets?: string[]
+  gateway?: string
+  prefixLength?: number
+  dns?: string[]
+}
 
 export type XoProject = {
   id: Branded<'project'>
@@ -758,6 +814,12 @@ export type XoProject = {
     templates: XoVmTemplate['id'][]
     networks: XoNetwork['id'][]
     srs: XoSr['id'][]
+    /** when not empty, instances can only be created with one of these sizes */
+    offerings: XoOffering['id'][]
+    /** public IPs are allocated from these pools at creation */
+    ipPools: string[]
+    /** backup jobs (smart mode, by tag) the instances can be subscribed to */
+    backupJobs: string[]
   }
   /** generated ACL v2 roles, one per project role */
   roleIds: Record<XoProjectRole, XoAclRole['id']>
@@ -794,6 +856,8 @@ export type XoAuthenticationToken = {
 }
 
 export type XoVbd = BaseXapiXo & {
+  /** project owning the VBD (tenant model) */
+  $project?: XoProject['id']
   attached: boolean
   bootable: boolean
   device: string | null
@@ -863,6 +927,8 @@ export type XoVgpuType = BaseXapiXo & {
 
 export type XoVif = BaseXapiXo & {
   $VM: XoVm['id']
+  /** project owning the VIF (tenant model) */
+  $project?: XoProject['id']
 
   $network: XoNetwork['id']
 

@@ -19,11 +19,24 @@ import { forEach, generateUnsecureToken, isEmpty, lightSet, streamToArray, throw
 
 // ===================================================================
 
-const normalize = ({ addresses, id = throwFn('id is a required field'), name = '', networks, resourceSets }) => ({
+// gateway, prefixLength and dns are optional, used to configure the addresses in the guests (cloud-init)
+const normalize = ({
   addresses,
+  dns,
+  gateway,
+  id = throwFn('id is a required field'),
+  name = '',
+  networks,
+  prefixLength,
+  resourceSets,
+}) => ({
+  addresses,
+  dns,
+  gateway,
   id,
   name,
   networks,
+  prefixLength,
   resourceSets,
 })
 
@@ -50,14 +63,17 @@ export default class IpPools {
     })
   }
 
-  async createIpPool({ addresses, name, networks }) {
+  async createIpPool({ addresses, dns, gateway, name, networks, prefixLength }) {
     const id = await this._generateId()
 
     await this._save({
       addresses,
+      dns,
+      gateway,
       id,
       name,
       networks,
+      prefixLength,
     })
 
     return id
@@ -232,11 +248,14 @@ export default class IpPools {
     )
   }
 
-  async updateIpPool(id, { addresses, name, networks, resourceSets }) {
+  async updateIpPool(id, { addresses, dns, gateway, name, networks, prefixLength, resourceSets }) {
     const ipPool = await this.getIpPool(id)
     const previousAddresses = { ...ipPool.addresses }
 
     name != null && (ipPool.name = name)
+    dns !== undefined && (ipPool.dns = dns ?? undefined)
+    gateway !== undefined && (ipPool.gateway = gateway ?? undefined)
+    prefixLength !== undefined && (ipPool.prefixLength = prefixLength ?? undefined)
     if (addresses) {
       const addresses_ = ipPool.addresses || {}
       forEach(addresses, (props, address) => {

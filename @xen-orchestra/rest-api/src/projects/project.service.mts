@@ -1,6 +1,8 @@
 import type {
   XapiXoRecord,
+  XoIpPool,
   XoNetwork,
+  XoOffering,
   XoPool,
   XoProject,
   XoProjectRole,
@@ -54,10 +56,10 @@ export class ProjectService {
     }
     const project = await xoApp.getProject(id)
     const { usage } = await xoApp.getProjectUsage(id)
-    return { ...project, role, usage, resources: this.#getResources(project) }
+    return { ...project, role, usage, resources: await this.#getResources(project) }
   }
 
-  #getResources({ scope }: XoProject): ProjectDetails['resources'] {
+  async #getResources({ scope }: XoProject): Promise<ProjectDetails['resources']> {
     const restApi = this.#restApi
     const resolve = <T extends XapiXoRecord, U>(ids: string[], type: T['type'], map: (object: T) => U): U[] =>
       ids.flatMap(id => {
@@ -97,6 +99,7 @@ export class ProjectService {
         size: sr.size,
         usage: sr.usage,
       })),
+      offerings: (await this.#xoApp.getOfferings()).filter(offering => scope.offerings.includes(offering.id)),
     }
   }
 
@@ -140,6 +143,22 @@ export class ProjectService {
     const xoApp = this.#xoApp
     const project = await xoApp.getProject(id)
     const { scope } = project
+
+    // the provider sells sizes: with offerings, the size comes from the offering only
+    const { offering: offeringId, ...vmParams } = body
+    if (scope.offerings.length !== 0) {
+      if (offeringId === undefined || !scope.offerings.includes(offeringId as XoOffering['id'])) {
+        throw forbiddenOperation('create VM', 'an offering of the project is required')
+      }
+      if (body.cpus !== undefined || body.memory !== undefined) {
+        throw forbiddenOperation('create VM', 'the size comes from the offering, cpus and memory cannot be set')
+      }
+      const offering = await xoApp.getOffering(offeringId)
+      vmParams.cpus = offering.cpus
+      vmParams.memory = offering.memory
+    } else if (offeringId !== undefined) {
+      throw forbiddenOperation('create VM', 'the project has no offerings')
+    }
 
     const poolId = body.pool as XoPool['id']
     if (!scope.pools.includes(poolId)) {
@@ -196,16 +215,87 @@ export class ProjectService {
       }
     }
 
-    return xoApp.withProjectLock(id, async () => {
-      await xoApp.assertProjectQuotaForVm(id, templateId, body)
+    if (scope.ipPools.length !== 0 && body.vifs === undefined) {
+      throw forbiddenOperation('create VM', 'the networks must be given, public IPs are allocated per VIF')
+    }
 
-      return this.#vmService.create({
-        ...body,
-        pool: poolId,
-        template: body.template as XoVmTemplate['uuid'],
-        vdis: body.vdis as Parameters<VmService['create']>[0]['vdis'],
-        project: id,
+    // IP pools are shared between projects: the allocation lock is taken inside the project lock
+    return xoApp.withProjectLock(id, () =>
+      xoApp.withIpAllocationLock(async () => {
+        const allocations = body.vifs !== undefined ? await xoApp.pickProjectAddresses(id, networkIds) : []
+        const vifs = body.vifs?.map(vif => {
+          const index = allocations.findIndex(allocation => allocation.networkId === vif.network)
+          const allocation = index === -1 ? undefined : allocations.splice(index, 1)[0]
+          return {
+            ...vif,
+            mac: vif.mac ?? xoApp.generateMacAddress(),
+            allocation,
+          }
+        })
+        const allocated = (vifs ?? []).filter(vif => vif.allocation !== undefined)
+
+        await xoApp.assertProjectQuotaForVm(id, templateId, { ...vmParams, ips: allocated.length })
+
+        const networkConfig = getNetworkConfig(vifs ?? [])
+        const vmId = await this.#vmService.create({
+          ...vmParams,
+          vifs: vifs?.map(({ allocation, ...vif }) => ({
+            ...vif,
+            ...(allocation !== undefined && { ipv4_allowed: [allocation.address] }),
+          })),
+          ...(networkConfig !== undefined && {
+            network_config: networkConfig,
+            cloud_config: vmParams.cloud_config ?? '#cloud-config\n',
+          }),
+          pool: poolId,
+          template: body.template as XoVmTemplate['uuid'],
+          vdis: body.vdis as Parameters<VmService['create']>[0]['vdis'],
+          project: id,
+        })
+
+        const vm = this.#restApi.getObject<XoVm>(vmId, 'VM')
+        for (const vif of allocated) {
+          const xoVif = vm.VIFs.map(vifId => this.#restApi.getObject<XoVif>(vifId, 'VIF')).find(
+            _ => _.MAC.toLowerCase() === vif.mac.toLowerCase()
+          )
+          if (xoVif !== undefined) {
+            await xoApp.registerVifAddress(xoVif.id, vif.allocation!.address, vif.allocation!.pool.id)
+          }
+        }
+        return vmId
       })
-    })
+    )
   }
+}
+
+/**
+ * cloud-init network configuration (version 1) matching the VIFs by MAC address: static for the allocated public
+ * IPs whose pool describes the network, DHCP for the others. Undefined when no address can be configured.
+ */
+function getNetworkConfig(
+  vifs: { mac: string; allocation?: { address: string; pool: XoIpPool } }[]
+): string | undefined {
+  if (
+    !vifs.some(({ allocation }) => allocation?.pool.gateway !== undefined && allocation.pool.prefixLength !== undefined)
+  ) {
+    return undefined
+  }
+  const lines = ['version: 1', 'config:']
+  vifs.forEach(({ mac, allocation }, index) => {
+    lines.push('  - type: physical', `    name: eth${index}`, `    mac_address: '${mac}'`, '    subnets:')
+    const pool = allocation?.pool
+    if (allocation === undefined || pool?.gateway === undefined || pool.prefixLength === undefined) {
+      lines.push('      - type: dhcp')
+      return
+    }
+    lines.push(
+      '      - type: static',
+      `        address: ${allocation.address}/${pool.prefixLength}`,
+      `        gateway: ${pool.gateway}`
+    )
+    if (pool.dns !== undefined && pool.dns.length !== 0) {
+      lines.push(`        dns_nameservers: [${pool.dns.join(', ')}]`)
+    }
+  })
+  return lines.join('\n') + '\n'
 }

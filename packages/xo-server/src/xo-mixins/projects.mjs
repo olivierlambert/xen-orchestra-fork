@@ -1,8 +1,9 @@
 // @ts-check
 
+import { randomBytes } from 'node:crypto'
 import { forbiddenOperation, invalidParameters, noSuchObject } from 'xo-common/api-errors.js'
 
-import { Organizations, Projects } from '../models/projects.mjs'
+import { Offerings, Organizations, Projects } from '../models/projects.mjs'
 import {
   getProjectRolePrivileges,
   hasProjectRole,
@@ -20,12 +21,30 @@ import {
  * @typedef {typeof PROJECT_ROLES[number]} ProjectRole
  * @typedef {typeof ORGANIZATION_ROLES[number]} OrganizationRole
  * @typedef {Partial<Record<typeof QUOTA_KEYS[number], number>>} Quota
- * @typedef {{ pools: string[], templates: string[], networks: string[], srs: string[] }} Scope
+ * @typedef {{
+ *   pools: string[],
+ *   templates: string[],
+ *   networks: string[],
+ *   srs: string[],
+ *   offerings: string[],
+ *   ipPools: string[],
+ *   backupJobs: string[],
+ * }} Scope
+ * @typedef {{
+ *   id: string,
+ *   name: string,
+ *   family: string,
+ *   cpus: number,
+ *   memory: number,
+ *   disk: number,
+ *   pricePerHour: number,
+ * }} Offering
  * @typedef {{
  *   id: string,
  *   name: string,
  *   members: Record<string, OrganizationRole>,
  *   adminGroupId: string,
+ *   suspended?: { at: number, reason: string, projectMembers: Record<string, Record<string, ProjectRole>> },
  * }} Organization
  * @typedef {{
  *   id: string,
@@ -46,7 +65,7 @@ import {
  */
 const adminGroupName = ({ id, name }) => `${name}: organization admins (${id.slice(0, 8)})`
 
-const EMPTY_SCOPE = { pools: [], templates: [], networks: [], srs: [] }
+const EMPTY_SCOPE = { pools: [], templates: [], networks: [], srs: [], offerings: [], ipPools: [], backupJobs: [] }
 
 /**
  * @param {unknown} quota
@@ -93,6 +112,10 @@ export default class Projects_ {
   // @ts-ignore initialized in core-started
   #projects
 
+  /** @type {Offerings} */
+  // @ts-ignore initialized in core-started
+  #offerings
+
   #withProjectLock = makeKeyedLock()
 
   /**
@@ -118,6 +141,13 @@ export default class Projects_ {
       })
       this.#projects = projects
 
+      const offerings = new Offerings({
+        connection: app._redis,
+        namespace: 'offering',
+        crypto: app.cryptoCredentials,
+      })
+      this.#offerings = offerings
+
       app.addConfigManager(
         'organizations',
         () => organizations.get(),
@@ -125,14 +155,20 @@ export default class Projects_ {
         ['users']
       )
       app.addConfigManager(
+        'offerings',
+        () => offerings.get(),
+        (/** @type {Offering[]} */ records) => offerings.update(records)
+      )
+      app.addConfigManager(
         'projects',
         () => projects.get(),
         (/** @type {Project[]} */ records) => projects.update(records),
-        ['organizations', 'roles']
+        ['organizations', 'roles', 'offerings']
       )
     })
 
     app.hooks.on('clean', () => this.#projects.rebuildIndexes())
+    app.hooks.on('start', () => this.#syncProjectRoles())
   }
 
   // === Organization
@@ -231,6 +267,20 @@ export default class Projects_ {
   }
 
   /**
+   * Called when a user is deleted: their ACL roles and groups are cleaned by XO, the organizations are not.
+   *
+   * @param {string} userId
+   */
+  async removeUserFromOrganizations(userId) {
+    for (const organization of await this.getOrganizations()) {
+      if (organization.members[userId] !== undefined) {
+        delete organization.members[userId]
+        await this.#organizations.update(organization)
+      }
+    }
+  }
+
+  /**
    * Creates a user who can only access XO through the projects of this organization.
    *
    * @param {string} id
@@ -243,7 +293,99 @@ export default class Projects_ {
     return user
   }
 
+  // === Offering
+
+  /**
+   * @param {Omit<Offering, 'id'>} params
+   * @returns {Promise<Offering>}
+   */
+  createOffering({ name, family = 'general', cpus, memory, disk, pricePerHour = 0 }) {
+    return this.#offerings.add({ name, family, cpus, memory, disk, pricePerHour })
+  }
+
+  /**
+   * @param {string} id
+   * @returns {Promise<Offering>}
+   */
+  async getOffering(id) {
+    const offering = await this.#offerings.first(id)
+    if (offering === undefined) {
+      throw noSuchObject(id, 'offering')
+    }
+    return offering
+  }
+
+  /** @returns {Promise<Offering[]>} */
+  getOfferings() {
+    return this.#offerings.get()
+  }
+
+  /**
+   * @param {string} id
+   * @param {Partial<Omit<Offering, 'id'>>} props
+   */
+  async updateOffering(id, props) {
+    const offering = await this.getOffering(id)
+    for (const key of /** @type {const} */ (['name', 'family', 'cpus', 'memory', 'disk', 'pricePerHour'])) {
+      if (props[key] !== undefined) {
+        // @ts-expect-error same type for each key
+        offering[key] = props[key]
+      }
+    }
+    return this.#offerings.update(offering)
+  }
+
+  /**
+   * Existing instances keep their size, projects stop proposing it.
+   *
+   * @param {string} id
+   */
+  async deleteOffering(id) {
+    await this.getOffering(id)
+    for (const project of await this.getProjects()) {
+      if (project.scope.offerings?.includes(id)) {
+        await this.updateProject(project.id, { scope: { offerings: project.scope.offerings.filter(_ => _ !== id) } })
+      }
+    }
+    await this.#offerings.remove(id)
+  }
+
   // === Project
+
+  /**
+   * Brings the privileges of the generated roles in line with the current role definitions, so that projects
+   * created by a previous version get the new privileges.
+   */
+  async #syncProjectRoles() {
+    const app = this._app
+    for (const project of await this.getProjects()) {
+      for (const role of PROJECT_ROLES) {
+        const roleId = project.roleIds[role]
+        const expected = getProjectRolePrivileges(project.id, role)
+        let current
+        try {
+          current = await app.getAclV2RolePrivileges(roleId)
+        } catch (error) {
+          if (noSuchObject.is(error)) {
+            continue
+          }
+          throw error
+        }
+        const same = (/** @type {any} */ a, /** @type {any} */ b) =>
+          a.resource === b.resource && a.action === b.action && a.effect === b.effect && a.selector === b.selector
+        for (const privilege of current) {
+          if (!expected.some(_ => same(_, privilege))) {
+            await app.deleteAclV2Privilege(privilege.id)
+          }
+        }
+        for (const privilege of expected) {
+          if (!current.some((/** @type {any} */ _) => same(_, privilege))) {
+            await app.createAclV2Privilege({ ...privilege, roleId })
+          }
+        }
+      }
+    }
+  }
 
   /**
    * @param {{ organizationId: string, name: string, description?: string, quota?: Quota, scope?: Partial<Scope> }} params
@@ -273,7 +415,12 @@ export default class Projects_ {
         await this._app.createAclV2Privilege({ ...privilege, roleId })
       }
     }
-    await this._app.addAclV2GroupRole(organization.adminGroupId, project.roleIds.admin)
+    if (organization.suspended === undefined) {
+      await this._app.addAclV2GroupRole(organization.adminGroupId, project.roleIds.admin)
+    } else {
+      organization.suspended.projectMembers[project.id] = {}
+      await this.#organizations.update(organization)
+    }
 
     return this.#projects.update(project)
   }
@@ -287,12 +434,17 @@ export default class Projects_ {
     if (project === undefined) {
       throw noSuchObject(id, 'project')
     }
+    // projects created before a scope key existed
+    project.scope = normalizeScope(project.scope)
     return project
   }
 
   /** @returns {Promise<Project[]>} */
-  getProjects() {
-    return this.#projects.get()
+  async getProjects() {
+    return (await this.#projects.get()).map((/** @type {Project} */ project) => ({
+      ...project,
+      scope: normalizeScope(project.scope),
+    }))
   }
 
   /**
@@ -368,6 +520,9 @@ export default class Projects_ {
     const project = await this.getProject(id)
     if (role !== null) {
       const organization = await this.getOrganization(project.organizationId)
+      if (organization.suspended !== undefined) {
+        throw forbiddenOperation('add project member', 'the organization is suspended')
+      }
       if (organization.members[userId] === undefined) {
         throw forbiddenOperation('add project member', 'the user is not a member of the organization')
       }
@@ -405,6 +560,9 @@ export default class Projects_ {
         return 'admin'
       }
       const organization = await this.getOrganization(project.organizationId)
+      if (organization.suspended !== undefined) {
+        return
+      }
       if (organization.members[userId] === 'admin') {
         return 'admin'
       }
@@ -462,10 +620,129 @@ export default class Projects_ {
     if (user.permission === 'admin') {
       return
     }
-    const role = (await this.getOrganization(id)).members[user.id]
+    const organization = await this.getOrganization(id)
+    if (organization.suspended !== undefined) {
+      throw forbiddenOperation('organization', 'the organization is suspended')
+    }
+    const role = organization.members[user.id]
     if (role === undefined || (minRole === 'admin' && role !== 'admin')) {
       throw forbiddenOperation('organization', `requires the ${minRole} role on the organization`)
     }
+  }
+
+  /**
+   * Members of a project can use the console of its instances.
+   *
+   * The console proxy only knows ACL v1, this lets project members through.
+   *
+   * @param {string} userId
+   * @param {string} vmId
+   */
+  async canUseConsoleThroughProject(userId, vmId) {
+    let vm
+    try {
+      vm = this._app.getObject(vmId, 'VM')
+    } catch {
+      return false
+    }
+    return vm.$project !== undefined && hasProjectRole(await this.getUserProjectRole(userId, vm.$project), 'member')
+  }
+
+  // === Suspension
+
+  /**
+   * Suspends an organization, e.g. for non-payment: its instances are stopped and its members lose every right
+   * on its projects until it is resumed. Accounts and data are kept.
+   *
+   * @param {string} id
+   * @param {{ reason?: string }} [opts]
+   */
+  async suspendOrganization(id, { reason = '' } = {}) {
+    const app = this._app
+    const organization = await this.getOrganization(id)
+    if (organization.suspended !== undefined) {
+      return
+    }
+
+    /** @type {Record<string, Record<string, ProjectRole>>} */
+    const projectMembers = {}
+    const projects = await this.#projects.get({ organizationId: id })
+    for (const project of projects) {
+      projectMembers[project.id] = {}
+      for (const { userId, role } of await this.getProjectMembers(project.id)) {
+        projectMembers[project.id][userId] = role
+        await app.deleteAclV2UserRole(userId, project.roleIds[role])
+      }
+      await app.deleteAclV2GroupRole(organization.adminGroupId, project.roleIds.admin).catch(() => {})
+    }
+    organization.suspended = { at: Date.now(), reason, projectMembers }
+    await this.#organizations.update(organization)
+
+    // best effort: a VM which cannot be stopped is left running, the members have no access to it anyway
+    await Promise.all(
+      projects.flatMap(project =>
+        this.#getProjectObjects(project.id)
+          .vms.filter(vm => vm.type === 'VM' && vm.power_state !== 'Halted')
+          .map(async vm => {
+            const xapi = app.getXapi(vm)
+            try {
+              await xapi.callAsync('VM.clean_shutdown', vm._xapiRef)
+            } catch {
+              await xapi.callAsync('VM.hard_shutdown', vm._xapiRef).catch(() => {})
+            }
+          })
+      )
+    )
+  }
+
+  /**
+   * Gives back the rights the members had when the organization was suspended. Instances are not restarted.
+   *
+   * @param {string} id
+   */
+  async resumeOrganization(id) {
+    const app = this._app
+    const organization = await this.getOrganization(id)
+    const { suspended } = organization
+    if (suspended === undefined) {
+      return
+    }
+
+    for (const project of await this.#projects.get({ organizationId: id })) {
+      await app.addAclV2GroupRole(organization.adminGroupId, project.roleIds.admin).catch(() => {})
+      for (const [userId, role] of Object.entries(suspended.projectMembers[project.id] ?? {})) {
+        // members removed while suspended stay removed
+        if (organization.members[userId] !== undefined) {
+          await app.addAclV2UserRole(userId, project.roleIds[role]).catch(() => {})
+        }
+      }
+    }
+    delete organization.suspended
+    await this.#organizations.update(organization)
+  }
+
+  /**
+   * Sets a new random password for a member, for organization admins: there are no invitation emails.
+   *
+   * Only for accounts which belong to this organization only, never for XO administrators.
+   *
+   * @param {string} id
+   * @param {string} userId
+   * @returns {Promise<string>} the new password
+   */
+  async resetMemberPassword(id, userId) {
+    const app = this._app
+    const organization = await this.getOrganization(id)
+    const user = await app.getUser(userId)
+    const otherOrganizations = (await this.getOrganizations()).filter(
+      _ => _.id !== id && _.members[userId] !== undefined
+    )
+    if (organization.members[userId] === undefined || user.permission === 'admin' || otherOrganizations.length !== 0) {
+      throw forbiddenOperation('reset password', 'only for accounts which belong to this organization only')
+    }
+    const password = randomBytes(12).toString('base64url')
+    await app.updateUser(userId, { password })
+    return password
   }
 
   // === Usage and quota
@@ -481,6 +758,7 @@ export default class Projects_ {
     return {
       vms: [...getOwned('VM'), ...getOwned('VM-snapshot')],
       vdis: [...getOwned('VDI'), ...getOwned('VDI-snapshot')],
+      vifs: getOwned('VIF'),
     }
   }
 
@@ -489,8 +767,8 @@ export default class Projects_ {
    */
   async getProjectUsage(id) {
     const project = await this.getProject(id)
-    const { vms, vdis } = this.#getProjectObjects(id)
-    return { quota: project.quota, usage: computeProjectUsage(vms, vdis) }
+    const { vms, vdis, vifs } = this.#getProjectObjects(id)
+    return { quota: project.quota, usage: computeProjectUsage(vms, vdis, vifs) }
   }
 
   /**
@@ -500,7 +778,7 @@ export default class Projects_ {
    *
    * @param {string} id
    * @param {string} templateId XO id of the template
-   * @param {{ cpus?: number, memory?: number, vdis?: ({ size?: number, userdevice?: string, destroy?: boolean })[] }} params
+   * @param {{ cpus?: number, memory?: number, ips?: number, vdis?: ({ size?: number, userdevice?: string, destroy?: boolean })[] }} params
    */
   async assertProjectQuotaForVm(id, templateId, params) {
     const app = this._app
@@ -516,16 +794,29 @@ export default class Projects_ {
       }
     }
 
-    const request = estimateVmResources(
-      { cpus: template.CPUs.number, memory: template.memory.dynamic?.[1] ?? template.memory.size, templateDisks },
-      params
-    )
+    const request = {
+      ...estimateVmResources(
+        { cpus: template.CPUs.number, memory: template.memory.dynamic?.[1] ?? template.memory.size, templateDisks },
+        params
+      ),
+      ips: params.ips ?? 0,
+    }
+    await this.assertProjectQuota(id, request)
+    return request
+  }
+
+  /**
+   * Throws if adding these resources to the project would exceed its quota.
+   *
+   * @param {string} id
+   * @param {Quota} request
+   */
+  async assertProjectQuota(id, request) {
     const { quota, usage } = await this.getProjectUsage(id)
     const exceeded = getExceededQuotas(quota, usage, request)
     if (exceeded.length !== 0) {
       throw forbiddenOperation('create VM', `the project quota would be exceeded: ${exceeded.join(', ')}`)
     }
-    return request
   }
 
   /**

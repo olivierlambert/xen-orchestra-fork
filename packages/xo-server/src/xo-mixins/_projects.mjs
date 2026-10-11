@@ -17,7 +17,7 @@ export const PROJECT_ROLE_LABELS = {
   admin: 'Project admin',
 }
 
-export const QUOTA_KEYS = /** @type {const} */ (['instances', 'vcpus', 'memory', 'storage', 'snapshots'])
+export const QUOTA_KEYS = /** @type {const} */ (['instances', 'vcpus', 'memory', 'storage', 'snapshots', 'ips'])
 
 /**
  * @param {string | undefined} role
@@ -45,6 +45,8 @@ const VIEWER_PRIVILEGES = [
   { resource: 'vm-snapshot', action: 'read' },
   { resource: 'vdi', action: 'read' },
   { resource: 'vdi-snapshot', action: 'read' },
+  { resource: 'vbd', action: 'read' },
+  { resource: 'vif', action: 'read' },
 ]
 
 const MEMBER_PRIVILEGES = [
@@ -61,7 +63,6 @@ const MEMBER_PRIVILEGES = [
   { resource: 'vm', action: 'update:nameLabel' },
   { resource: 'vm', action: 'update:nameDescription' },
   { resource: 'vm', action: 'update:notes' },
-  { resource: 'vm', action: 'update:tags' },
 ]
 
 const ADMIN_PRIVILEGES = [
@@ -74,6 +75,7 @@ const ADMIN_PRIVILEGES = [
 // - pool `create:vm`: instances are created through the project, which checks its scope and quota
 // - `clone`, `update:cpus`, `update:memory`, VDI `create`/`update:size`: would bypass the quota
 // - `migrate-send`, `export`, `update:resourceSet`, `update:share`: infrastructure-level operations
+// - `update:tags`: tags select the VMs of backup policies, they are changed through the project
 const PRIVILEGES_BY_ROLE = {
   viewer: VIEWER_PRIVILEGES,
   member: MEMBER_PRIVILEGES,
@@ -99,9 +101,10 @@ export function getProjectRolePrivileges(projectId, role) {
  *
  * @param {{ type: string, CPUs: { number: number }, memory: { size: number, dynamic?: number[] } }[]} vms objects of type VM or VM-snapshot
  * @param {{ type: string, size: number }[]} vdis objects of type VDI or VDI-snapshot
+ * @param {{ allowedIpv4Addresses?: string[] }[]} [vifs] public IPs are the addresses VIFs are locked to
  */
-export function computeProjectUsage(vms, vdis) {
-  const usage = { instances: 0, vcpus: 0, memory: 0, storage: 0, snapshots: 0 }
+export function computeProjectUsage(vms, vdis, vifs = []) {
+  const usage = { instances: 0, vcpus: 0, memory: 0, storage: 0, snapshots: 0, ips: 0 }
   for (const vm of vms) {
     if (vm.type === 'VM') {
       usage.instances++
@@ -115,6 +118,9 @@ export function computeProjectUsage(vms, vdis) {
     if (vdi.type === 'VDI') {
       usage.storage += vdi.size
     }
+  }
+  for (const vif of vifs) {
+    usage.ips += vif.allowedIpv4Addresses?.length ?? 0
   }
   return usage
 }

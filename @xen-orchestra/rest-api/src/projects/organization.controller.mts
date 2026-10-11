@@ -214,4 +214,44 @@ export class OrganizationController extends Controller {
     await this.#restApi.xoApp.assertOrganizationRole(this.#user, id as XoOrganization['id'], 'admin')
     await this.#restApi.xoApp.setOrganizationMember(id as XoOrganization['id'], userId as XoUser['id'], null)
   }
+
+  /**
+   * Suspends the organization, e.g. for non-payment: its instances are stopped and its members lose every right
+   * on its projects until it is resumed. Administrators only.
+   */
+  @Extension('x-mcp-exposure', 'confirm')
+  @Post('{id}/actions/suspend')
+  @Middlewares(json())
+  @SuccessResponse(noContentResp.status, noContentResp.description)
+  @Response(notFoundResp.status, notFoundResp.description)
+  async suspendOrganization(@Path() id: string, @Body() body: { reason?: string }): Promise<void> {
+    await this.#restApi.xoApp.suspendOrganization(id as XoOrganization['id'], body)
+  }
+
+  /**
+   * Gives back the rights of the members. Instances are not restarted. Administrators only.
+   */
+  @Extension('x-mcp-exposure', 'confirm')
+  @Post('{id}/actions/resume')
+  @SuccessResponse(noContentResp.status, noContentResp.description)
+  @Response(notFoundResp.status, notFoundResp.description)
+  async resumeOrganization(@Path() id: string): Promise<void> {
+    await this.#restApi.xoApp.resumeOrganization(id as XoOrganization['id'])
+  }
+
+  /**
+   * Sets a new random password for a member who belongs to this organization only, and returns it.
+   *
+   * Requires the admin role in the organization.
+   */
+  @Extension('x-mcp-exposure', 'deny')
+  @Post('{id}/members/{userId}/actions/reset_password')
+  @Security('*', ['acl'])
+  @Response(forbiddenOperationResp.status, forbiddenOperationResp.description)
+  @Response(notFoundResp.status, notFoundResp.description)
+  async resetMemberPassword(@Path() id: string, @Path() userId: string): Promise<{ password: string }> {
+    const xoApp = this.#restApi.xoApp
+    await xoApp.assertOrganizationRole(this.#user, id as XoOrganization['id'], 'admin')
+    return { password: await xoApp.resetMemberPassword(id as XoOrganization['id'], userId as XoUser['id']) }
+  }
 }

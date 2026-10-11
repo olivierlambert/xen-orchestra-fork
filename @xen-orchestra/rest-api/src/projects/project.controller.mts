@@ -1,4 +1,12 @@
-import type { XoOrganization, XoProject, XoProjectRole, XoUser } from '@vates/types'
+import type {
+  XoOrganization,
+  XoProject,
+  XoProjectRestorePoint,
+  XoProjectRole,
+  XoProjectUsageRecord,
+  XoUser,
+  XoVm,
+} from '@vates/types'
 import { json } from 'express'
 import { inject } from 'inversify'
 import { provide } from 'inversify-binding-decorators'
@@ -13,6 +21,7 @@ import {
   Path,
   Post,
   Put,
+  Query,
   Response,
   Route,
   Security,
@@ -208,6 +217,118 @@ export class ProjectController extends Controller {
   async createVm(@Path() id: string, @Body() body: ProjectCreateVmBody): Promise<{ id: string }> {
     await this.#restApi.xoApp.assertProjectRole(this.#user, id as XoProject['id'], 'member')
     const vmId = await this.#projectService.createVm(id as XoProject['id'], body)
+    this.setStatus(createdResp.status)
+    return { id: vmId }
+  }
+
+  /**
+   * Hourly samples of the resources of the project, for billing tools. Requires a role in the project.
+   *
+   * @param from timestamp in milliseconds, defaults to the beginning
+   * @param to timestamp in milliseconds, defaults to now
+   */
+  @Extension('x-mcp-exposure', 'allow')
+  @Get('{id}/usage-records')
+  @Security('*', ['acl'])
+  @Response(forbiddenOperationResp.status, forbiddenOperationResp.description)
+  async getUsageRecords(
+    @Path() id: string,
+    @Query() from?: number,
+    @Query() to?: number
+  ): Promise<Unbrand<XoProjectUsageRecord>[]> {
+    await this.#restApi.xoApp.assertProjectRole(this.#user, id as XoProject['id'], 'viewer')
+    return this.#restApi.xoApp.getProjectUsageRecords(id as XoProject['id'], { from, to })
+  }
+
+  /**
+   * Backup policies the instances of the project can be subscribed to. Requires a role in the project.
+   */
+  @Extension('x-mcp-exposure', 'allow')
+  @Get('{id}/backup-policies')
+  @Security('*', ['acl'])
+  @Response(forbiddenOperationResp.status, forbiddenOperationResp.description)
+  async getBackupPolicies(@Path() id: string): Promise<{ id: string; name: string }[]> {
+    await this.#restApi.xoApp.assertProjectRole(this.#user, id as XoProject['id'], 'viewer')
+    return (await this.#restApi.xoApp.getProjectBackupPolicies(id as XoProject['id'])).map(({ id, name }) => ({
+      id,
+      name,
+    }))
+  }
+
+  /**
+   * Requires a role in the project.
+   */
+  @Extension('x-mcp-exposure', 'allow')
+  @Get('{id}/vms/{vmId}/backup-policy')
+  @Security('*', ['acl'])
+  @Response(forbiddenOperationResp.status, forbiddenOperationResp.description)
+  @Response(notFoundResp.status, notFoundResp.description)
+  async getInstanceBackupPolicy(@Path() id: string, @Path() vmId: string): Promise<{ policyId: string | null }> {
+    await this.#restApi.xoApp.assertProjectRole(this.#user, id as XoProject['id'], 'viewer')
+    const policyId = await this.#restApi.xoApp.getInstanceBackupPolicy(id as XoProject['id'], vmId as XoVm['id'])
+    return { policyId: policyId ?? null }
+  }
+
+  /**
+   * Subscribes an instance to a backup policy of the project, or unsubscribes it with `null`.
+   *
+   * Requires the member role in the project.
+   *
+   * @example body { "policyId": "f3e1e2b0-7f43-4c38-8b5e-6a2b1b1c2d3e" }
+   */
+  @Extension('x-mcp-exposure', 'confirm')
+  @Put('{id}/vms/{vmId}/backup-policy')
+  @Security('*', ['acl'])
+  @Middlewares(json())
+  @SuccessResponse(noContentResp.status, noContentResp.description)
+  @Response(forbiddenOperationResp.status, forbiddenOperationResp.description)
+  @Response(notFoundResp.status, notFoundResp.description)
+  async setInstanceBackupPolicy(
+    @Path() id: string,
+    @Path() vmId: string,
+    @Body() body: { policyId: string | null }
+  ): Promise<void> {
+    await this.#restApi.xoApp.assertProjectRole(this.#user, id as XoProject['id'], 'member')
+    await this.#restApi.xoApp.setInstanceBackupPolicy(id as XoProject['id'], vmId as XoVm['id'], body.policyId)
+  }
+
+  /**
+   * Restore points made by the backup policies of the project, including those of deleted instances.
+   *
+   * Requires a role in the project.
+   */
+  @Extension('x-mcp-exposure', 'allow')
+  @Get('{id}/restore-points')
+  @Security('*', ['acl'])
+  @Response(forbiddenOperationResp.status, forbiddenOperationResp.description)
+  async getRestorePoints(@Path() id: string, @Query() vmId?: string): Promise<XoProjectRestorePoint[]> {
+    await this.#restApi.xoApp.assertProjectRole(this.#user, id as XoProject['id'], 'viewer')
+    return this.#restApi.xoApp.listProjectRestorePoints(id as XoProject['id'], { vmId })
+  }
+
+  /**
+   * Restores a restore point of the project as a new instance, on an SR of the project, within the quota.
+   *
+   * Requires the member role in the project.
+   *
+   * @example body { "restorePoint": "<backup repository id>/xo-vm-backups/<vm uuid>/<timestamp>.json", "sr": "<sr id>" }
+   */
+  @Extension('x-mcp-exposure', 'confirm')
+  @Post('{id}/actions/restore')
+  @Security('*', ['acl'])
+  @Middlewares(json())
+  @SuccessResponse(createdResp.status, createdResp.description)
+  @Response(forbiddenOperationResp.status, forbiddenOperationResp.description)
+  @Response(notFoundResp.status, notFoundResp.description)
+  async restore(
+    @Path() id: string,
+    @Body() body: { restorePoint: string; sr: string; name?: string }
+  ): Promise<{ id: string }> {
+    await this.#restApi.xoApp.assertProjectRole(this.#user, id as XoProject['id'], 'member')
+    const vmId = await this.#restApi.xoApp.restoreProjectBackup(id as XoProject['id'], body.restorePoint, {
+      srId: body.sr,
+      name: body.name,
+    })
     this.setStatus(createdResp.status)
     return { id: vmId }
   }

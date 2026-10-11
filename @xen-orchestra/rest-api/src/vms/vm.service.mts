@@ -38,9 +38,6 @@ import { BackupLogService } from '../backup-logs/backup-log.service.mjs'
 
 const log = createLogger('xo:rest-api:vm-service')
 
-/** same key as in xo-server, where the `$project` property of VMs and VDIs is read from */
-const PROJECT_OTHER_CONFIG_KEY = 'xo:project'
-
 export class VmService {
   #restApi: RestApi
   #alarmService: AlarmService
@@ -123,25 +120,8 @@ export class VmService {
   create = defer(this.#create)
 
   async #setProject(xapiVm: XenApiVmWrapped, project: XoProject['id'] | undefined) {
-    const xapi = xapiVm.$xapi
-    const setOtherConfig = async (type: 'VM' | 'VDI', ref: string) => {
-      await xapi.call(`${type}.remove_from_other_config`, ref, PROJECT_OTHER_CONFIG_KEY)
-      if (project !== undefined) {
-        await xapi.call(`${type}.add_to_other_config`, ref, PROJECT_OTHER_CONFIG_KEY, project)
-      }
-    }
-
-    await setOtherConfig('VM', xapiVm.$ref)
-    for (const vbdRef of await xapi.call<string[]>('VM.get_VBDs', xapiVm.$ref)) {
-      const vdiRef = await xapi.call<string>('VBD.get_VDI', vbdRef)
-      if (vdiRef !== 'OpaqueRef:NULL') {
-        await setOtherConfig('VDI', vdiRef)
-      }
-    }
-
-    // the XO objects must carry their project before returning: the creation is listed right away, and the next
-    // quota check of the project counts it
-    await xapi.barrier(xapiVm.$ref)
+    // see the tenant model in xo-server, also writes the VIFs, VBDs and VDIs and waits for the XO objects
+    await this.#restApi.xoApp.setVmProject(xapiVm.uuid as XoVm['id'], project)
   }
 
   getVmsStatus(opts?: { filter?: string | ((obj: XoVm) => boolean) }) {

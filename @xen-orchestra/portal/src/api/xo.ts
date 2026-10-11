@@ -22,6 +22,7 @@ async function request<T>(
     method,
     headers: {
       accept: 'application/json',
+      'x-requested-with': 'XMLHttpRequest',
       ...(body !== undefined && { 'content-type': 'application/json' }),
       ...headers,
     },

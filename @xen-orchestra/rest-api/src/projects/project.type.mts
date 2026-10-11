@@ -7,6 +7,24 @@ export type ProjectScope = {
   templates?: string[]
   networks?: string[]
   srs?: string[]
+  /** when not empty, instances can only be created with one of these sizes */
+  offerings?: string[]
+  /** public IPs are allocated from these pools at creation */
+  ipPools?: string[]
+  /** backup jobs (smart mode, by tag) the instances can be subscribed to */
+  backupJobs?: string[]
+}
+
+export type Offering = {
+  id: string
+  name: string
+  family: string
+  cpus: number
+  /** in bytes */
+  memory: number
+  /** system disk, in bytes */
+  disk: number
+  pricePerHour: number
 }
 
 export type CreateProjectBody = {
@@ -57,6 +75,7 @@ export type ProjectDetails = ProjectWithRole & {
     templates: ProjectTemplate[]
     networks: ProjectResource[]
     srs: (ProjectResource & { size: number; usage: number })[]
+    offerings: Offering[]
   }
 }
 
@@ -79,6 +98,8 @@ export type OrganizationMember = {
  */
 export type ProjectCreateVmBody = {
   pool: string
+  /** required when the project has offerings, the size then comes from the offering */
+  offering?: string
   /** template UUID */
   template: string
   name_label: string

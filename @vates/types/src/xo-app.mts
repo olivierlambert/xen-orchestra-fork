@@ -9,12 +9,17 @@ import type {
   XoConfigBackupArchive,
   XoGroup,
   XoHost,
+  XoOffering,
   XoOrganization,
   XoOrganizationRole,
   XoPool,
   XoProject,
   XoProjectRole,
+  XoProjectQuota,
+  XoProjectRestorePoint,
   XoProjectUsage,
+  XoProjectUsageRecord,
+  XoIpPool,
   XoPoolBackupArchive,
   XoProxy,
   XoSchedule,
@@ -264,9 +269,19 @@ export type XoApp = {
   assertProjectQuotaForVm(
     id: XoProject['id'],
     templateId: XoVmTemplate['id'],
-    params: { cpus?: number; memory?: number; vdis?: { size?: number; userdevice?: string; destroy?: boolean }[] }
+    params: {
+      cpus?: number
+      memory?: number
+      ips?: number
+      vdis?: { size?: number; userdevice?: string; destroy?: boolean }[]
+    }
   ): Promise<Omit<XoProjectUsage, 'snapshots'>>
   assertProjectRole(user: XoUser, id: XoProject['id'], minRole: XoProjectRole): Promise<void>
+  createOffering(params: Omit<XoOffering, 'id'>): Promise<XoOffering>
+  deleteOffering(id: string): Promise<void>
+  getOffering(id: string): Promise<XoOffering>
+  getOfferings(): Promise<XoOffering[]>
+  updateOffering(id: string, props: Partial<Omit<XoOffering, 'id'>>): Promise<XoOffering>
   createOrganization(params: { name: string }): Promise<XoOrganization>
   createOrganizationUser(
     id: XoOrganization['id'],
@@ -302,6 +317,48 @@ export type XoApp = {
     }
   ): Promise<XoProject>
   withProjectLock<T>(id: XoProject['id'], fn: () => Promise<T>): Promise<T>
+  // tenant model services (project-services mixin)
+  setVmProject(vmId: XoVm['id'], projectId: XoProject['id'] | undefined): Promise<void>
+  getProjectUsageRecords(
+    projectId: XoProject['id'],
+    opts?: { from?: number; to?: number }
+  ): Promise<XoProjectUsageRecord[]>
+  sampleProjectUsage(): Promise<void>
+  pickProjectAddresses(
+    projectId: XoProject['id'],
+    networkIds: string[]
+  ): Promise<{ networkId: string; address: string; pool: XoIpPool }[]>
+  registerVifAddress(vifId: string, address: string, poolId: string): Promise<void>
+  withIpAllocationLock<T>(fn: () => Promise<T>): Promise<T>
+  generateMacAddress(): string
+  getProjectBackupPolicies(
+    projectId: XoProject['id']
+  ): Promise<{ id: string; name: string; tag: string; remotes: string[] }[]>
+  getInstanceBackupPolicy(projectId: XoProject['id'], vmId: XoVm['id']): Promise<string | undefined>
+  setInstanceBackupPolicy(projectId: XoProject['id'], vmId: XoVm['id'], policyId: string | null): Promise<void>
+  listProjectRestorePoints(projectId: XoProject['id'], opts?: { vmId?: string }): Promise<XoProjectRestorePoint[]>
+  restoreProjectBackup(
+    projectId: XoProject['id'],
+    backupId: string,
+    opts: { srId: string; name?: string }
+  ): Promise<XoVm['id']>
+  getUserSshKeys(userId: XoUser['id']): Promise<{ title: string; key: string }[]>
+  addUserSshKey(userId: XoUser['id'], sshKey: { title: string; key: string }): Promise<void>
+  removeUserSshKey(userId: XoUser['id'], key: string): Promise<void>
+  suspendOrganization(id: XoOrganization['id'], opts?: { reason?: string }): Promise<void>
+  resumeOrganization(id: XoOrganization['id']): Promise<void>
+  resetMemberPassword(id: XoOrganization['id'], userId: XoUser['id']): Promise<string>
+  assertProjectQuota(id: XoProject['id'], request: XoProjectQuota): Promise<void>
+  changeUserPassword(userId: XoUser['id'], oldPassword: string, newPassword: string): Promise<void>
+  deleteAuthenticationToken(id: string): Promise<void>
+  getIpPool(id: string): Promise<XoIpPool>
+  getAllIpPools(userId?: XoUser['id']): Promise<XoIpPool[]>
+  createIpPool(params: Omit<XoIpPool, 'id' | 'resourceSets'>): Promise<string>
+  updateIpPool(
+    id: string,
+    props: Partial<Omit<XoIpPool, 'id' | 'addresses'>> & { addresses?: Record<string, { vifs?: string[] } | null> }
+  ): Promise<void>
+  deleteIpPool(id: string): Promise<void>
   allocIpAddresses(vifId: XoVif['id'], addAddresses?: string[], removeAddresses?: string[]): Promise<void>
   addAclV2GroupRole(groupId: XoGroup['id'], roleId: XoAclRole['id']): Promise<XoGroupRole>
   addAclV2UserRole(userId: XoUser['id'], roleId: XoAclRole['id']): Promise<XoUserRole>

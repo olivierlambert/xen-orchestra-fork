@@ -95,13 +95,17 @@ describe('computeProjectUsage()', function () {
           { type: 'VDI-snapshot', size: 20 * GiB },
         ]
       ),
-      { instances: 2, vcpus: 6, memory: 12 * GiB, storage: 40 * GiB, snapshots: 1 }
+      { instances: 2, vcpus: 6, memory: 12 * GiB, storage: 40 * GiB, snapshots: 1, ips: 0 }
     )
+  })
+
+  it('counts the addresses the VIFs are locked to', function () {
+    assert.equal(computeProjectUsage([], [], [{ allowedIpv4Addresses: ['192.0.2.10'] }, {}]).ips, 1)
   })
 })
 
 describe('getExceededQuotas()', function () {
-  const usage = { instances: 2, vcpus: 6, memory: 12 * GiB, storage: 40 * GiB, snapshots: 1 }
+  const usage = { instances: 2, vcpus: 6, memory: 12 * GiB, storage: 40 * GiB, snapshots: 1, ips: 0 }
 
   it('ignores undefined quotas', function () {
     assert.deepEqual(getExceededQuotas({}, usage, { vcpus: 1000 }), [])
