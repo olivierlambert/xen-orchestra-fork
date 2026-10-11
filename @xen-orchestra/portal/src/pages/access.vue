@@ -1,242 +1,343 @@
 <template>
-  <PageHeader title="API & SSH keys" icon="fa:lock" />
+  <PageHeader title="SSH & API keys" subtitle="Your personal keys: they work in every project you belong to." />
   <PageContent>
-    <UiCard>
-      <UiCardTitle>
-        API keys
-        <template #info>{{ store.apiKeys.length }}</template>
-        <template #description>
-          For Terraform, Ansible, the CLI or your own scripts.
-          {{
-            store.isLive
-              ? 'A key has the rights of your account: your roles in the projects of your organization.'
-              : 'A key is limited to this organization and to its role.'
-          }}
-        </template>
-      </UiCardTitle>
-      <UiCard v-if="newSecret" class="secret">
-        <UiInfo accent="success" wrap>Copy this key now, it won't be shown again.</UiInfo>
-        <div class="secret-value">
-          <code class="typo-body-regular">{{ newSecret }}</code>
-          <UiButton variant="secondary" accent="brand" size="small" left-icon="fa:copy" @click="copy(newSecret)">
-            {{ copied ? 'Copied' : 'Copy' }}
+    <PPanel
+      title="SSH keys"
+      :count="store.sshKeys.length"
+      description="Installed in new instances at first boot."
+      flush
+    >
+      <template #actions>
+        <UiButton variant="secondary" accent="brand" size="small" left-icon="fa:plus" @click="sshOpen = true">
+          Add SSH key
+        </UiButton>
+      </template>
+      <ul v-if="store.sshKeys.length !== 0" class="p-list">
+        <li v-for="key of store.sshKeys" :key="key.id" class="key">
+          <span class="key-icon"><PIcon :icon="faKey" /></span>
+          <span class="key-text">
+            <span class="typo-body-bold-small">{{ key.name }}</span>
+            <span class="p-caption p-muted p-mono fingerprint">{{ key.fingerprint }}</span>
+          </span>
+          <span class="p-caption p-muted type">{{ keyType(key.publicKey) }}</span>
+          <UiButton
+            variant="tertiary"
+            accent="danger"
+            size="small"
+            left-icon="fa:trash"
+            @click="store.removeSshKey(key.id)"
+          >
+            Remove
           </UiButton>
-          <UiButton variant="tertiary" accent="brand" size="small" @click="newSecret = undefined">Done</UiButton>
-        </div>
-      </UiCard>
-      <VtsTable :state="store.apiKeys.length === 0 ? { type: 'no-data', message: 'No API key' } : undefined">
-        <thead>
-          <tr>
-            <VtsHeaderCell>Name</VtsHeaderCell>
-            <VtsHeaderCell>Key</VtsHeaderCell>
-            <VtsHeaderCell v-if="!store.isLive">Role</VtsHeaderCell>
-            <VtsHeaderCell>Created</VtsHeaderCell>
-            <VtsHeaderCell>Last used</VtsHeaderCell>
-            <VtsHeaderCell>Actions</VtsHeaderCell>
-          </tr>
-        </thead>
-        <tbody>
-          <VtsRow v-for="key of store.apiKeys" :key="key.id">
-            <VtsTextCell>{{ key.name }}</VtsTextCell>
-            <VtsTextCell>{{ key.prefix }}…</VtsTextCell>
-            <VtsTextCell v-if="!store.isLive">{{ ROLES[key.role] }}</VtsTextCell>
-            <VtsTextCell>{{ formatDate(key.createdAt) }}</VtsTextCell>
-            <UiTableCell>
-              <VtsRelativeTime v-if="key.lastUsedAt" :date="key.lastUsedAt" />
-              <template v-else>Never</template>
-            </UiTableCell>
-            <UiTableCell>
-              <UiButton
-                variant="tertiary"
-                accent="danger"
-                size="small"
-                left-icon="fa:trash"
-                @click="store.revokeApiKey(key.id)"
-              >
-                Revoke
-              </UiButton>
-            </UiTableCell>
-          </VtsRow>
-        </tbody>
-      </VtsTable>
-      <div class="inline-form">
-        <FormField label="Name" for="key-name">
-          <UiInput id="key-name" v-model="keyName" accent="brand" />
-        </FormField>
-        <FormField v-if="store.isLive" label="Your password" for="key-password">
-          <UiInput id="key-password" v-model="keyPassword" accent="brand" type="password" />
-        </FormField>
-        <FormField v-if="!store.isLive" label="Role" for="key-role">
-          <NativeSelect id="key-role" v-model="keyRole">
-            <option v-for="(label, role) of ROLES" :key="role" :value="role">{{ label }}</option>
-          </NativeSelect>
-        </FormField>
-        <UiButton
-          variant="secondary"
-          accent="brand"
-          size="medium"
-          left-icon="fa:plus"
-          :disabled="String(keyName ?? '').trim() === '' || (store.isLive && String(keyPassword ?? '') === '')"
-          @click="createKey()"
-        >
+        </li>
+      </ul>
+      <EmptyState
+        v-else
+        :icon="faKey"
+        title="No SSH key yet"
+        description="Add the public key of your computer to sign in to new instances without a password."
+      >
+        <UiButton variant="primary" accent="brand" size="small" left-icon="fa:plus" @click="sshOpen = true">
+          Add SSH key
+        </UiButton>
+      </EmptyState>
+    </PPanel>
+
+    <PPanel title="API keys" :count="store.apiKeys.length" flush>
+      <template #description> For scripts and Terraform. A key acts as you, with your roles in each project. </template>
+      <template #actions>
+        <UiButton variant="secondary" accent="brand" size="small" left-icon="fa:plus" @click="openApiKey()">
           Create API key
         </UiButton>
-      </div>
-    </UiCard>
-
-    <UiCard>
-      <UiCardTitle>
-        SSH keys
-        <template #info>{{ store.sshKeys.length }}</template>
-        <template #description>Injected into new Linux instances with cloud-init.</template>
-      </UiCardTitle>
-      <VtsTable :state="store.sshKeys.length === 0 ? { type: 'no-data', message: 'No SSH key' } : undefined">
-        <thead>
-          <tr>
-            <VtsHeaderCell>Name</VtsHeaderCell>
-            <VtsHeaderCell>Fingerprint</VtsHeaderCell>
-            <VtsHeaderCell>Added</VtsHeaderCell>
-            <VtsHeaderCell>Actions</VtsHeaderCell>
-          </tr>
-        </thead>
-        <tbody>
-          <VtsRow v-for="key of store.sshKeys" :key="key.id">
-            <VtsTextCell>{{ key.name }}</VtsTextCell>
-            <VtsTextCell>{{ key.fingerprint }}</VtsTextCell>
-            <VtsTextCell>{{ key.createdAt ? formatDate(key.createdAt) : '-' }}</VtsTextCell>
-            <UiTableCell>
-              <UiButton
-                variant="tertiary"
-                accent="danger"
-                size="small"
-                left-icon="fa:trash"
-                @click="store.removeSshKey(key.id)"
-              >
-                Remove
-              </UiButton>
-            </UiTableCell>
-          </VtsRow>
-        </tbody>
-      </VtsTable>
-      <div class="ssh-form">
-        <FormField label="Name" for="ssh-name">
-          <UiInput id="ssh-name" v-model="sshName" accent="brand" />
-        </FormField>
-        <FormField label="Public key" for="ssh-key">
-          <UiTextarea id="ssh-key" v-model="sshPublicKey" accent="brand" />
-        </FormField>
-        <div>
+      </template>
+      <ul v-if="store.apiKeys.length !== 0" class="p-list">
+        <li v-for="key of store.apiKeys" :key="key.id" class="key">
+          <span class="key-icon api"><PIcon :icon="faCode" /></span>
+          <span class="key-text">
+            <span class="typo-body-bold-small">{{ key.name }}</span>
+            <span class="p-caption p-muted"
+              ><span class="p-mono">{{ key.prefix }}…</span> · created
+              <VtsRelativeTime v-if="key.createdAt" :date="key.createdAt"
+            /></span>
+          </span>
+          <span class="p-caption p-muted type">
+            <template v-if="key.lastUsedAt">Used <VtsRelativeTime :date="key.lastUsedAt" /></template>
+            <template v-else>Never used</template>
+          </span>
           <UiButton
-            variant="secondary"
+            variant="tertiary"
+            accent="danger"
+            size="small"
+            left-icon="fa:xmark"
+            @click="store.revokeApiKey(key.id)"
+          >
+            Revoke
+          </UiButton>
+        </li>
+      </ul>
+      <EmptyState
+        v-else
+        :icon="faCode"
+        title="No API key"
+        description="Automate your instances with the API, the CLI or Terraform."
+      />
+      <template #footer>
+        <span class="typo-body-regular-small">
+          Example:
+          <code class="p-mono snippet">curl -H "Authorization: Bearer $KEY" {{ apiBase }}/rest/v0/projects</code>
+        </span>
+      </template>
+    </PPanel>
+
+    <PModal
+      :open="sshOpen"
+      title="Add an SSH key"
+      :icon="faKey"
+      description="Paste the public part, usually ~/.ssh/id_ed25519.pub"
+      @close="sshOpen = false"
+    >
+      <label class="field">
+        <span class="typo-body-bold-small">Name</span>
+        <UiInput v-model="sshName" accent="brand" placeholder="laptop" />
+      </label>
+      <label class="field">
+        <span class="typo-body-bold-small">Public key</span>
+        <textarea
+          v-model="sshPublicKey"
+          rows="4"
+          class="textarea p-mono"
+          placeholder="ssh-ed25519 AAAA… you@laptop"
+          spellcheck="false"
+        />
+        <span v-if="sshPublicKey && !isSshKeyValid" class="typo-body-regular-small error"
+          >This does not look like an OpenSSH public key.</span
+        >
+      </label>
+      <template #footer>
+        <UiButton variant="secondary" accent="brand" size="medium" @click="sshOpen = false">Cancel</UiButton>
+        <UiButton
+          variant="primary"
+          accent="brand"
+          size="medium"
+          :disabled="!isSshKeyValid || !sshName"
+          @click="addSshKey()"
+        >
+          Add key
+        </UiButton>
+      </template>
+    </PModal>
+
+    <PModal
+      :open="apiOpen"
+      :title="newSecret ? 'Your new API key' : 'Create an API key'"
+      :icon="faCode"
+      @close="apiOpen = false"
+    >
+      <template v-if="newSecret">
+        <div class="secret-warning typo-body-regular-small">
+          <PIcon :icon="faTriangleExclamation" size="small" />
+          Copy it now: it is shown only once.
+        </div>
+        <CopyValue :value="newSecret" mono block />
+      </template>
+      <template v-else>
+        <label class="field">
+          <span class="typo-body-bold-small">Name</span>
+          <UiInput v-model="keyName" accent="brand" placeholder="terraform" />
+        </label>
+        <label v-if="store.isLive" class="field">
+          <span class="typo-body-bold-small">Your password</span>
+          <UiInput v-model="keyPassword" accent="brand" type="password" />
+          <span class="typo-body-regular-small p-muted">Confirms it is you before creating a long-lived key.</span>
+        </label>
+      </template>
+      <template #footer>
+        <template v-if="newSecret">
+          <UiButton variant="primary" accent="brand" size="medium" @click="apiOpen = false">Done</UiButton>
+        </template>
+        <template v-else>
+          <UiButton variant="secondary" accent="brand" size="medium" @click="apiOpen = false">Cancel</UiButton>
+          <UiButton
+            variant="primary"
             accent="brand"
             size="medium"
-            left-icon="fa:plus"
-            :disabled="!isSshKeyValid"
-            @click="addSshKey()"
+            :busy="creatingKey"
+            :disabled="String(keyName ?? '').trim() === '' || (store.isLive && String(keyPassword ?? '') === '')"
+            @click="createKey()"
           >
-            Add SSH key
+            Create key
           </UiButton>
-        </div>
-      </div>
-    </UiCard>
+        </template>
+      </template>
+    </PModal>
   </PageContent>
 </template>
 
 <script lang="ts" setup>
-import FormField from '@/components/FormField.vue'
-import NativeSelect from '@/components/NativeSelect.vue'
 import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
-import type { ApiKey } from '@/mock/types.ts'
+import CopyValue from '@/components/ui/CopyValue.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import PIcon from '@/components/ui/PIcon.vue'
+import PModal from '@/components/ui/PModal.vue'
+import PPanel from '@/components/ui/PPanel.vue'
 import { usePortalStore } from '@/stores/portal.store.ts'
-import { formatDate } from '@/utils/format.ts'
+import { useToasts } from '@/stores/toasts.store.ts'
 import VtsRelativeTime from '@core/components/relative-time/VtsRelativeTime.vue'
-import VtsHeaderCell from '@core/components/table/cells/VtsHeaderCell.vue'
-import VtsTextCell from '@core/components/table/cells/VtsTextCell.vue'
-import VtsRow from '@core/components/table/VtsRow.vue'
-import VtsTable from '@core/components/table/VtsTable.vue'
 import UiButton from '@core/components/ui/button/UiButton.vue'
-import UiCard from '@core/components/ui/card/UiCard.vue'
-import UiCardTitle from '@core/components/ui/card-title/UiCardTitle.vue'
-import UiInfo from '@core/components/ui/info/UiInfo.vue'
 import UiInput from '@core/components/ui/input/UiInput.vue'
-import UiTableCell from '@core/components/ui/table-cell/UiTableCell.vue'
-import UiTextarea from '@core/components/ui/text-area/UiTextarea.vue'
-import { useClipboard } from '@vueuse/core'
+import { faCode, faKey, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons'
 import { computed, ref } from 'vue'
 
 const store = usePortalStore()
-const { copy, copied } = useClipboard()
+const toasts = useToasts()
 
-const ROLES: Record<ApiKey['role'], string> = {
-  'project-admin': 'Project admin',
-  'project-member': 'Project member',
-  'read-only': 'Read only',
+// the address of the portal; on a development address, the site of the provider reads better in examples
+const apiBase = computed(() => {
+  if (!/^(localhost|127\.|\[::1\])/.test(location.hostname) || store.provider.supportUrl === undefined) {
+    return location.origin
+  }
+  return new URL(store.provider.supportUrl).origin
+})
+
+const keyType = (publicKey: string | undefined) => {
+  const type = publicKey?.split(' ')[0] ?? ''
+  return type.replace('ssh-', '').replace('ecdsa-sha2-', 'ECDSA ').toUpperCase()
 }
 
-const keyName = ref<string | number | undefined>('')
-const keyPassword = ref<string | number | undefined>('')
-const keyRole = ref<string | number | undefined>('project-member')
-const newSecret = ref<string>()
+// SSH keys
 
-async function createKey() {
-  newSecret.value = await store.createApiKey(
-    String(keyName.value).trim(),
-    keyRole.value as ApiKey['role'],
-    String(keyPassword.value ?? '')
-  )
-  keyName.value = ''
-  keyPassword.value = ''
-}
-
+const sshOpen = ref(false)
 const sshName = ref<string | number | undefined>('')
 const sshPublicKey = ref('')
 
-const isSshKeyValid = computed(
-  () =>
-    String(sshName.value ?? '').trim() !== '' &&
-    /^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp\d+) [A-Za-z0-9+/=]+/.test(sshPublicKey.value.trim())
+const isSshKeyValid = computed(() =>
+  /^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp\d+) [A-Za-z0-9+/=]+/.test(sshPublicKey.value.trim())
 )
 
 async function addSshKey() {
-  await store.addSshKey(String(sshName.value).trim(), sshPublicKey.value.trim())
+  const name = String(sshName.value).trim()
+  await store.addSshKey(name, sshPublicKey.value.trim())
+  toasts.success('SSH key added', `${name} is installed in new instances.`)
+  sshOpen.value = false
   sshName.value = ''
   sshPublicKey.value = ''
+}
+
+// API keys
+
+const apiOpen = ref(false)
+const keyName = ref<string | number | undefined>('')
+const keyPassword = ref<string | number | undefined>('')
+const newSecret = ref<string>()
+const creatingKey = ref(false)
+
+function openApiKey() {
+  keyName.value = ''
+  keyPassword.value = ''
+  newSecret.value = undefined
+  apiOpen.value = true
+}
+
+async function createKey() {
+  creatingKey.value = true
+  try {
+    newSecret.value = await store.createApiKey(
+      String(keyName.value).trim(),
+      'project-admin',
+      String(keyPassword.value ?? '')
+    )
+  } finally {
+    creatingKey.value = false
+  }
 }
 </script>
 
 <style lang="postcss" scoped>
-.inline-form {
+.key {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 1.2rem;
-
-  > * {
-    min-width: 16rem;
-  }
-}
-
-.ssh-form {
-  display: flex;
-  flex-direction: column;
-  gap: 1.2rem;
-  max-width: 64rem;
-}
-
-.secret {
-  background-color: var(--color-success-background-selected);
-}
-
-.secret-value {
-  display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 1.2rem;
+  padding: 1.2rem 2.4rem;
+  flex-wrap: wrap;
+}
 
-  code {
-    word-break: break-all;
-    color: var(--color-neutral-txt-primary);
+.key-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.6rem;
+  height: 3.6rem;
+  border-radius: var(--p-radius-m);
+  background-color: var(--p-brand-soft);
+  color: var(--color-brand-txt-base);
+  flex-shrink: 0;
+
+  &.api {
+    background-color: color-mix(in srgb, var(--p-chart-2) 14%, var(--p-surface));
+    color: var(--p-chart-2);
   }
+}
+
+.key-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 20rem;
+  color: var(--p-text);
+}
+
+.fingerprint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.type {
+  min-width: 10rem;
+}
+
+.snippet {
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--p-radius-s);
+  background-color: var(--p-subtle);
+  color: var(--p-text);
+  overflow-wrap: anywhere;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  color: var(--p-text);
+}
+
+.textarea {
+  padding: 1rem 1.2rem;
+  border: var(--p-border);
+  border-radius: var(--p-radius-m);
+  background-color: var(--p-surface);
+  color: var(--p-text);
+  resize: vertical;
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-brand-item-base);
+    box-shadow: 0 0 0 0.3rem color-mix(in srgb, var(--color-brand-item-base) 18%, transparent);
+  }
+}
+
+.error {
+  color: var(--color-danger-txt-base);
+}
+
+.secret-warning {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 1rem 1.2rem;
+  border-radius: var(--p-radius-m);
+  background-color: color-mix(in srgb, var(--color-warning-item-base) 14%, var(--p-surface));
+  color: var(--color-warning-txt-base);
 }
 </style>

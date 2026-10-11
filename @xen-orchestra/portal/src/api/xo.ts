@@ -59,14 +59,26 @@ export const xo = {
 export const projectFilter = (projectId: string) =>
   encodeURIComponent(`$project:/^${projectId.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$/`)
 
+/** Drops the session cookies, e.g. a token expired or revoked: XO refuses a request carrying both a token and a password */
+export function clearSession() {
+  setCookie(TOKEN_COOKIE, '', 0)
+  setCookie(CONSOLE_TOKEN_COOKIE, '', 0)
+}
+
+/** `crypto.randomUUID` only exists in secure contexts (HTTPS or localhost), not on a plain HTTP address */
+function randomId() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
 export async function login(username: string, password: string) {
+  clearSession()
   const { token } = await request<{ token: { id: string; expiration: number } }>(
     'POST',
     '/users/me/authentication_tokens',
     {
       // one token per sign-in: XO reuses the token of a client, a session would then outlive its logout
       body: {
-        client: { id: `cloud-portal-${crypto.randomUUID()}` },
+        client: { id: `cloud-portal-${randomId()}` },
         description: 'Cloud portal session',
         expiresIn: '1 day',
       },
@@ -85,8 +97,7 @@ export async function logout() {
       () => {}
     )
   }
-  setCookie(TOKEN_COOKIE, '', 0)
-  setCookie(CONSOLE_TOKEN_COOKIE, '', 0)
+  clearSession()
 }
 
 function getCookies(): Record<string, string> {

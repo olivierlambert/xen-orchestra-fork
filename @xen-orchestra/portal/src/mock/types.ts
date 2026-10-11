@@ -9,12 +9,23 @@ export type Provider = {
   supportUrl?: string
   color?: string
   currency: string
+  /** default of the organizations without their own billing mode */
+  billing?: BillingMode
   prices: { storagePerGiBMonth: number; snapshotPerGiBMonth: number; ipPerHour: number }
 }
+
+/**
+ * - `billing`: consumption is invoiced by the provider
+ * - `showback`: internal costs are shown, not invoiced
+ * - `none`: resources only, no cost (internal entities)
+ */
+export type BillingMode = 'billing' | 'showback' | 'none'
 
 export type Organization = {
   id: string
   name: string
+  billing?: BillingMode
+  costCenter?: string
 }
 
 export type Project = {
@@ -75,6 +86,8 @@ export type Instance = {
   backupPolicyId: string | undefined
   sshKeyIds: string[]
   createdAt: number
+  /** account which created the instance (live mode) */
+  createdBy?: string
 }
 
 export type Snapshot = {
@@ -110,6 +123,10 @@ export type Network = {
   gateway: string
   dhcp: boolean
   routerState: 'running' | 'starting'
+  /** from the provider (live mode) */
+  description?: string
+  /** instances get a public IPv4 on this network */
+  publicIpv4?: boolean
 }
 
 export type FloatingIp = {
@@ -157,12 +174,16 @@ export type SshKey = {
   publicKey?: string
 }
 
+export type ActivityKind = 'create' | 'delete' | 'power' | 'snapshot' | 'backup' | 'restore' | 'access' | 'other'
+
 export type ActivityEvent = {
   id: string
   projectId: string
   at: number
   user: string
   message: string
+  kind?: ActivityKind
+  instanceId?: string
 }
 
 export type UsageCategory = 'compute' | 'storage' | 'snapshots' | 'backups' | 'floating-ips'
@@ -174,6 +195,11 @@ export type UsageLine = {
   quantity: number
   unit: string
   cost: number
+  /** compute lines: vCPU × hours, the unit when no cost is shown */
+  vcpuHours?: number
+  /** instance the line is billed for, also for its disks and public IPs */
+  instanceId?: string
+  instanceName?: string
 }
 
 export type ProjectRole = 'viewer' | 'member' | 'admin'

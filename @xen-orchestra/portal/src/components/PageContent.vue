@@ -14,9 +14,10 @@ defineSlots<{
 .page-content {
   display: flex;
   flex-direction: column;
-  gap: 1.6rem;
-  padding: 1.6rem;
+  gap: var(--p-gap);
   width: 100%;
-  max-width: 140rem;
+  max-width: var(--p-content-width);
+  margin-inline: auto;
+  padding: 2.4rem var(--p-page-padding) 4.8rem;
 }
 </style>

@@ -1,445 +1,241 @@
 <template>
-  <PageHeader title="Networking" icon="fa:network-wired" />
+  <PageHeader
+    title="Networking"
+    :subtitle="
+      store.showsPublicIps
+        ? `Networks and public addresses of ${store.project.name}`
+        : `Networks available to ${store.project.name}`
+    "
+  />
   <PageContent>
-    <PreviewNotice>
-      Preview: the private networks below are the networks your provider made available to the project, and public IPs
-      are given to instances at creation from the pools of the project. Virtual routers, floating IPs, port forwarding
-      and firewall rules are not in Xen Orchestra yet: changes on this page stay in your browser.
-    </PreviewNotice>
-    <!-- PRIVATE NETWORKS -->
-    <UiCard>
-      <UiCardTitle>
-        Private networks
-        <template #info>{{ store.networks.length }}</template>
-        <template #description>
-          Isolated networks (SDN overlay). Each one has a managed virtual router for DHCP, DNS, outbound NAT and
-          firewall.
-        </template>
-      </UiCardTitle>
-      <VtsTable>
-        <thead>
-          <tr>
-            <VtsHeaderCell>Name</VtsHeaderCell>
-            <VtsHeaderCell>CIDR</VtsHeaderCell>
-            <VtsHeaderCell>Gateway</VtsHeaderCell>
-            <VtsHeaderCell>Instances</VtsHeaderCell>
-            <VtsHeaderCell>Router</VtsHeaderCell>
-          </tr>
-        </thead>
-        <tbody>
-          <VtsRow v-for="network of store.networks" :key="network.id">
-            <VtsTextCell>{{ network.name }}</VtsTextCell>
-            <VtsTextCell>{{ network.cidr }}</VtsTextCell>
-            <VtsTextCell>{{ network.gateway }}</VtsTextCell>
-            <VtsTextCell>
-              {{ store.instances.filter(instance => instance.networkId === network.id).length }}
-            </VtsTextCell>
-            <UiTableCell>
-              <UiTag :accent="network.routerState === 'running' ? 'success' : 'info'" variant="secondary">
-                {{ network.routerState === 'running' ? 'Running' : 'Starting' }}
-              </UiTag>
-            </UiTableCell>
-          </VtsRow>
-        </tbody>
-      </VtsTable>
-      <div class="inline-form">
-        <FormField label="Name" for="net-name">
-          <UiInput id="net-name" v-model="newNetwork.name" accent="brand" />
-        </FormField>
-        <FormField label="CIDR" for="net-cidr">
-          <UiInput id="net-cidr" v-model="newNetwork.cidr" accent="brand" />
-        </FormField>
-        <UiButton
-          variant="secondary"
-          accent="brand"
-          size="medium"
-          left-icon="fa:plus"
-          :disabled="!isNetworkValid"
-          @click="createNetwork()"
-        >
-          Create network
-        </UiButton>
-      </div>
-    </UiCard>
-
-    <!-- PUBLIC IPS -->
-    <UiCard>
-      <UiCardTitle>
-        Public IPs
-        <template #info>{{ store.floatingIps.length }} / {{ store.quota.floatingIps }}</template>
-        <template #description>
-          Attach an IP to one instance (1:1 NAT), or keep it on the router and forward ports to several instances.
-        </template>
-      </UiCardTitle>
-      <VtsTable :state="store.floatingIps.length === 0 ? { type: 'no-data', message: 'No public IP' } : undefined">
-        <thead>
-          <tr>
-            <VtsHeaderCell>Address</VtsHeaderCell>
-            <VtsHeaderCell>Attached to</VtsHeaderCell>
-            <VtsHeaderCell>Port forwards</VtsHeaderCell>
-            <VtsHeaderCell>Actions</VtsHeaderCell>
-          </tr>
-        </thead>
-        <tbody>
-          <VtsRow v-for="ip of store.floatingIps" :key="ip.id">
-            <VtsTextCell>{{ ip.address }}</VtsTextCell>
-            <UiTableCell>
-              <NativeSelect
-                :model-value="ip.instanceId ?? ''"
-                @update:model-value="value => store.attachFloatingIp(ip.id, value ? String(value) : undefined)"
-              >
-                <option value="">Router (port forwarding)</option>
-                <option v-for="instance of store.instances" :key="instance.id" :value="instance.id">
-                  {{ instance.name }} ({{ instance.privateIp }})
-                </option>
-              </NativeSelect>
-            </UiTableCell>
-            <VtsTextCell>{{ forwardsOf(ip.id).length }}</VtsTextCell>
-            <UiTableCell>
-              <UiButton
-                variant="tertiary"
-                accent="danger"
-                size="small"
-                left-icon="fa:trash"
-                @click="store.releaseFloatingIp(ip.id)"
-              >
-                Release
-              </UiButton>
-            </UiTableCell>
-          </VtsRow>
-        </tbody>
-      </VtsTable>
-      <div>
-        <UiButton
-          variant="secondary"
-          accent="brand"
-          size="medium"
-          left-icon="fa:plus"
-          :disabled="store.floatingIps.length >= store.quota.floatingIps"
-          @click="store.allocateFloatingIp()"
-        >
-          Allocate public IP
-        </UiButton>
-      </div>
-    </UiCard>
-
-    <!-- PORT FORWARDING -->
-    <UiCard>
-      <UiCardTitle>
-        Port forwarding
-        <template #info>{{ projectForwards.length }}</template>
-      </UiCardTitle>
-      <VtsTable :state="projectForwards.length === 0 ? { type: 'no-data', message: 'No port forward' } : undefined">
-        <thead>
-          <tr>
-            <VtsHeaderCell>Public</VtsHeaderCell>
-            <VtsHeaderCell>Protocol</VtsHeaderCell>
-            <VtsHeaderCell>Instance</VtsHeaderCell>
-            <VtsHeaderCell>Actions</VtsHeaderCell>
-          </tr>
-        </thead>
-        <tbody>
-          <VtsRow v-for="forward of projectForwards" :key="forward.id">
-            <VtsTextCell>{{ ipAddress(forward.floatingIpId) }}:{{ forward.publicPort }}</VtsTextCell>
-            <VtsTextCell>{{ forward.protocol.toUpperCase() }}</VtsTextCell>
-            <VtsLinkCell :to="`/instances/${forward.instanceId}`">
-              {{ store.getInstance(forward.instanceId)?.name }}:{{ forward.privatePort }}
-            </VtsLinkCell>
-            <UiTableCell>
-              <UiButton
-                variant="tertiary"
-                accent="danger"
-                size="small"
-                left-icon="fa:trash"
-                @click="store.removePortForward(forward.id)"
-              >
-                Remove
-              </UiButton>
-            </UiTableCell>
-          </VtsRow>
-        </tbody>
-      </VtsTable>
-      <div v-if="routerIps.length > 0" class="inline-form">
-        <FormField label="Public IP" for="pf-ip">
-          <NativeSelect id="pf-ip" v-model="newForward.floatingIpId">
-            <option v-for="ip of routerIps" :key="ip.id" :value="ip.id">{{ ip.address }}</option>
-          </NativeSelect>
-        </FormField>
-        <FormField label="Protocol" for="pf-proto">
-          <NativeSelect id="pf-proto" v-model="newForward.protocol">
-            <option value="tcp">TCP</option>
-            <option value="udp">UDP</option>
-          </NativeSelect>
-        </FormField>
-        <FormField label="Public port" for="pf-public">
-          <UiInput id="pf-public" v-model="newForward.publicPort" accent="brand" type="number" />
-        </FormField>
-        <FormField label="Instance" for="pf-instance">
-          <NativeSelect id="pf-instance" v-model="newForward.instanceId">
-            <option v-for="instance of store.instances" :key="instance.id" :value="instance.id">
-              {{ instance.name }}
-            </option>
-          </NativeSelect>
-        </FormField>
-        <FormField label="Private port" for="pf-private">
-          <UiInput id="pf-private" v-model="newForward.privatePort" accent="brand" type="number" />
-        </FormField>
-        <UiButton
-          variant="secondary"
-          accent="brand"
-          size="medium"
-          left-icon="fa:plus"
-          :disabled="!isForwardValid"
-          @click="addForward()"
-        >
-          Add
-        </UiButton>
-      </div>
-      <UiInfo v-else accent="info">Keep a public IP on the router to forward ports.</UiInfo>
-      <UiInfo v-if="forwardConflict" accent="warning">This public port is already forwarded on this IP.</UiInfo>
-    </UiCard>
-
-    <!-- FIREWALL -->
-    <UiCard>
-      <UiCardTitle>
-        Firewall
-        <template #description>Inbound rules applied by the router, evaluated top to bottom.</template>
-      </UiCardTitle>
-      <TabList>
-        <UiTabItem
+    <template v-if="store.isLive">
+      <div class="networks">
+        <article
           v-for="network of store.networks"
           :key="network.id"
-          :active="firewallNetworkId === network.id"
-          @click="firewallNetworkId = network.id"
+          class="network"
+          :class="{ public: network.publicIpv4 }"
         >
-          {{ network.name }}
-        </UiTabItem>
-      </TabList>
-      <VtsTable
-        :state="
-          networkRules.length === 0
-            ? { type: 'no-data', message: 'No rule: all inbound traffic is blocked' }
-            : undefined
-        "
-      >
-        <thead>
-          <tr>
-            <VtsHeaderCell>Action</VtsHeaderCell>
-            <VtsHeaderCell>Protocol</VtsHeaderCell>
-            <VtsHeaderCell>Ports</VtsHeaderCell>
-            <VtsHeaderCell>Source</VtsHeaderCell>
-            <VtsHeaderCell>Actions</VtsHeaderCell>
-          </tr>
-        </thead>
-        <tbody>
-          <VtsRow v-for="rule of networkRules" :key="rule.id">
-            <VtsStatusCell :status="rule.action === 'allow' ? 'allow' : 'drop'" />
-            <VtsTextCell>{{ rule.protocol.toUpperCase() }}</VtsTextCell>
-            <VtsTextCell>{{ rule.ports }}</VtsTextCell>
-            <VtsTextCell>{{ rule.source }}</VtsTextCell>
-            <UiTableCell>
-              <UiButton
-                variant="tertiary"
-                accent="danger"
-                size="small"
-                left-icon="fa:trash"
-                @click="store.removeFirewallRule(rule.id)"
-              >
-                Remove
-              </UiButton>
-            </UiTableCell>
-          </VtsRow>
-        </tbody>
-      </VtsTable>
-      <div class="inline-form">
-        <FormField label="Action" for="fw-action">
-          <NativeSelect id="fw-action" v-model="newRule.action">
-            <option value="allow">Allow</option>
-            <option value="deny">Deny</option>
-          </NativeSelect>
-        </FormField>
-        <FormField label="Protocol" for="fw-proto">
-          <NativeSelect id="fw-proto" v-model="newRule.protocol">
-            <option value="tcp">TCP</option>
-            <option value="udp">UDP</option>
-            <option value="icmp">ICMP</option>
-            <option value="any">Any</option>
-          </NativeSelect>
-        </FormField>
-        <FormField label="Ports" for="fw-ports" info="e.g. 443 or 8000-8100">
-          <UiInput id="fw-ports" v-model="newRule.ports" accent="brand" />
-        </FormField>
-        <FormField label="Source CIDR" for="fw-source">
-          <UiInput id="fw-source" v-model="newRule.source" accent="brand" />
-        </FormField>
-        <UiButton variant="secondary" accent="brand" size="medium" left-icon="fa:plus" @click="addRule()">
-          Add rule
-        </UiButton>
+          <header class="network-head">
+            <span class="network-icon"><PIcon :icon="network.publicIpv4 ? faGlobe : faLock" size="large" /></span>
+            <div>
+              <h2 class="typo-h6">{{ network.name }}</h2>
+              <p class="typo-body-regular-small p-muted">
+                {{ network.description || (network.publicIpv4 ? 'Public IPv4' : 'Private addressing') }}
+              </p>
+            </div>
+          </header>
+          <dl class="facts">
+            <div>
+              <dt>Addressing</dt>
+              <dd>{{ network.publicIpv4 ? 'Static public IPv4, set by cloud-init' : 'DHCP' }}</dd>
+            </div>
+            <div>
+              <dt>Instances</dt>
+              <dd class="p-num">{{ instancesOn(network.id).length }}</dd>
+            </div>
+            <div v-if="network.publicIpv4 && store.showsCosts">
+              <dt>Price</dt>
+              <dd class="p-num">{{ formatMoney(store.provider.prices.ipPerHour * 730) }} per address per month</dd>
+            </div>
+          </dl>
+          <div v-if="instancesOn(network.id).length !== 0" class="chips">
+            <RouterLink
+              v-for="instance of instancesOn(network.id)"
+              :key="instance.id"
+              :to="`/instances/${instance.id}`"
+              class="chip typo-body-regular-small"
+            >
+              <StatusDot :state="instance.state" dot-only />
+              {{ instance.name }}
+            </RouterLink>
+          </div>
+        </article>
       </div>
-    </UiCard>
+
+      <PPanel v-if="store.showsPublicIps" title="Public IPv4" :count="publicAddresses.length" flush>
+        <template #description>
+          Given to instances created on the Internet network, released when the instance is deleted.
+          <template v-if="Number.isFinite(store.quota.floatingIps)">
+            {{ store.usage.floatingIps }} of {{ store.quota.floatingIps }} used.
+          </template>
+        </template>
+        <ul v-if="publicAddresses.length !== 0" class="p-list">
+          <li v-for="item of publicAddresses" :key="item.address" class="address-row">
+            <span class="address-icon"><PIcon :icon="faGlobe" /></span>
+            <CopyValue :value="item.address" mono class="address typo-body-bold" />
+            <RouterLink :to="`/instances/${item.instance.id}`" class="attached typo-body-regular-small">
+              <PIcon :icon="faArrowRight" size="small" class="p-muted" />
+              <StatusDot :state="item.instance.state" dot-only />
+              {{ item.instance.name }}
+            </RouterLink>
+            <span v-if="store.showsCosts" class="p-caption p-muted p-num"
+              >{{ formatMoney(store.provider.prices.ipPerHour * 730) }}/mo</span
+            >
+          </li>
+        </ul>
+        <EmptyState
+          v-else
+          :icon="faGlobe"
+          title="No public address"
+          description="Create an instance on the Internet network to give it a public IPv4."
+        />
+      </PPanel>
+    </template>
+    <NetworkingPreview v-else />
   </PageContent>
 </template>
 
 <script lang="ts" setup>
-import FormField from '@/components/FormField.vue'
-import NativeSelect from '@/components/NativeSelect.vue'
+import NetworkingPreview from '@/components/NetworkingPreview.vue'
 import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
-import PreviewNotice from '@/components/PreviewNotice.vue'
-import type { FirewallRule, Protocol } from '@/mock/types.ts'
+import CopyValue from '@/components/ui/CopyValue.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import PIcon from '@/components/ui/PIcon.vue'
+import PPanel from '@/components/ui/PPanel.vue'
+import StatusDot from '@/components/ui/StatusDot.vue'
 import { usePortalStore } from '@/stores/portal.store.ts'
-import TabList from '@core/components/tab-list/TabList.vue'
-import VtsHeaderCell from '@core/components/table/cells/VtsHeaderCell.vue'
-import VtsLinkCell from '@core/components/table/cells/VtsLinkCell.vue'
-import VtsStatusCell from '@core/components/table/cells/VtsStatusCell.vue'
-import VtsTextCell from '@core/components/table/cells/VtsTextCell.vue'
-import VtsRow from '@core/components/table/VtsRow.vue'
-import VtsTable from '@core/components/table/VtsTable.vue'
-import UiButton from '@core/components/ui/button/UiButton.vue'
-import UiCard from '@core/components/ui/card/UiCard.vue'
-import UiCardTitle from '@core/components/ui/card-title/UiCardTitle.vue'
-import UiInfo from '@core/components/ui/info/UiInfo.vue'
-import UiInput from '@core/components/ui/input/UiInput.vue'
-import UiTabItem from '@core/components/ui/tab-item/UiTabItem.vue'
-import UiTableCell from '@core/components/ui/table-cell/UiTableCell.vue'
-import UiTag from '@core/components/ui/tag/UiTag.vue'
-import { computed, reactive, ref, watch } from 'vue'
+import { formatMoney } from '@/utils/format.ts'
+import { faArrowRight, faGlobe, faLock } from '@fortawesome/free-solid-svg-icons'
+import { computed } from 'vue'
 
 const store = usePortalStore()
 
-const isPort = (value: unknown) => Number.isInteger(Number(value)) && Number(value) > 0 && Number(value) < 65536
+const instancesOn = (networkId: string) => store.instances.filter(instance => instance.networkId === networkId)
 
-// Networks
-
-const newNetwork = reactive<{ name: string | number | undefined; cidr: string | number | undefined }>({
-  name: '',
-  cidr: '10.30.0.0/24',
-})
-
-const isNetworkValid = computed(
-  () =>
-    /^[a-z0-9][a-z0-9-]*$/.test(String(newNetwork.name ?? '')) &&
-    /^\d+\.\d+\.\d+\.0\/(1[6-9]|2[0-4])$/.test(String(newNetwork.cidr ?? ''))
+const publicAddresses = computed(() =>
+  store.instances
+    .flatMap(instance => (instance.publicIps ?? []).map(address => ({ address, instance })))
+    .sort((a, b) => a.address.localeCompare(b.address, 'en', { numeric: true }))
 )
-
-async function createNetwork() {
-  await store.createNetwork({ name: String(newNetwork.name), cidr: String(newNetwork.cidr) })
-  newNetwork.name = ''
-}
-
-// Public IPs and port forwarding
-
-const ipAddress = (id: string) => store.floatingIps.find(ip => ip.id === id)?.address
-const forwardsOf = (ipId: string) => store.portForwards.filter(forward => forward.floatingIpId === ipId)
-
-const routerIps = computed(() => store.floatingIps.filter(ip => ip.instanceId === undefined))
-const projectForwards = computed(() => store.floatingIps.flatMap(ip => forwardsOf(ip.id)))
-
-const newForward = reactive<{
-  floatingIpId: string | number | undefined
-  protocol: string | number | undefined
-  publicPort: string | number | undefined
-  instanceId: string | number | undefined
-  privatePort: string | number | undefined
-}>({
-  floatingIpId: undefined,
-  protocol: 'tcp',
-  publicPort: 8080,
-  instanceId: undefined,
-  privatePort: 80,
-})
-
-watch(
-  [routerIps, () => store.instances],
-  ([ips, instances]) => {
-    if (!ips.some(ip => ip.id === newForward.floatingIpId)) {
-      newForward.floatingIpId = ips[0]?.id
-    }
-    if (!instances.some(instance => instance.id === newForward.instanceId)) {
-      newForward.instanceId = instances[0]?.id
-    }
-  },
-  { immediate: true }
-)
-
-const forwardConflict = computed(() =>
-  store.portForwards.some(
-    forward =>
-      forward.floatingIpId === newForward.floatingIpId &&
-      forward.protocol === newForward.protocol &&
-      forward.publicPort === Number(newForward.publicPort)
-  )
-)
-
-const isForwardValid = computed(
-  () =>
-    newForward.floatingIpId !== undefined &&
-    newForward.instanceId !== undefined &&
-    isPort(newForward.publicPort) &&
-    isPort(newForward.privatePort) &&
-    !forwardConflict.value
-)
-
-function addForward() {
-  store.addPortForward({
-    floatingIpId: String(newForward.floatingIpId),
-    protocol: newForward.protocol as Protocol,
-    publicPort: Number(newForward.publicPort),
-    instanceId: String(newForward.instanceId),
-    privatePort: Number(newForward.privatePort),
-  })
-}
-
-// Firewall
-
-const firewallNetworkId = ref(store.networks[0]?.id)
-
-watch(
-  () => store.networks,
-  networks => {
-    if (!networks.some(network => network.id === firewallNetworkId.value)) {
-      firewallNetworkId.value = networks[0]?.id
-    }
-  }
-)
-
-const networkRules = computed(() => store.firewallRules.filter(rule => rule.networkId === firewallNetworkId.value))
-
-const newRule = reactive<{
-  action: string | number | undefined
-  protocol: string | number | undefined
-  ports: string | number | undefined
-  source: string | number | undefined
-}>({
-  action: 'allow',
-  protocol: 'tcp',
-  ports: '443',
-  source: '0.0.0.0/0',
-})
-
-function addRule() {
-  if (firewallNetworkId.value === undefined) {
-    return
-  }
-  store.addFirewallRule({
-    networkId: firewallNetworkId.value,
-    action: newRule.action as FirewallRule['action'],
-    protocol: newRule.protocol as FirewallRule['protocol'],
-    ports: newRule.protocol === 'icmp' || newRule.protocol === 'any' ? '*' : String(newRule.ports),
-    source: String(newRule.source),
-  })
-}
 </script>
 
 <style lang="postcss" scoped>
-.inline-form {
+.networks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(32rem, 1fr));
+  gap: var(--p-gap);
+}
+
+.network {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  padding: 2.4rem;
+  border: var(--p-border);
+  border-radius: var(--p-radius-l);
+  background-color: var(--p-surface);
+  box-shadow: var(--p-elevation);
+  animation: p-fade-up 0.25s ease-out both;
+
+  &.public {
+    background: linear-gradient(160deg, var(--p-brand-softer), var(--p-surface) 55%);
+  }
+}
+
+.network-head {
+  display: flex;
+  align-items: center;
+  gap: 1.4rem;
+  color: var(--p-text);
+}
+
+.network-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 4.4rem;
+  height: 4.4rem;
+  border-radius: var(--p-radius-m);
+  background-color: var(--p-subtle);
+  color: var(--p-muted);
+  flex-shrink: 0;
+
+  .public & {
+    background-color: var(--p-brand-soft);
+    color: var(--color-brand-txt-base);
+  }
+}
+
+.facts {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+
+  > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 1.6rem;
+    font-size: 1.4rem;
+  }
+
+  dt {
+    color: var(--p-muted);
+  }
+
+  dd {
+    color: var(--p-text);
+    text-align: end;
+  }
+}
+
+.chips {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 1.2rem;
+  gap: 0.8rem;
+}
 
-  > * {
-    min-width: 14rem;
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 1rem;
+  border: var(--p-border);
+  border-radius: 99rem;
+  background-color: var(--p-surface);
+  color: var(--p-text);
+  text-decoration: none;
+
+  &:hover {
+    border-color: var(--color-brand-item-base);
+  }
+}
+
+.address-row {
+  display: flex;
+  align-items: center;
+  gap: 1.6rem;
+  padding: 1.2rem 2.4rem;
+  flex-wrap: wrap;
+}
+
+.address-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.2rem;
+  height: 3.2rem;
+  border-radius: var(--p-radius-m);
+  background-color: var(--p-brand-soft);
+  color: var(--color-brand-txt-base);
+}
+
+.address {
+  min-width: 16rem;
+  color: var(--p-text);
+}
+
+.attached {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex: 1;
+  color: var(--p-text);
+  text-decoration: none;
+
+  &:hover {
+    color: var(--color-brand-txt-base);
   }
 }
 </style>

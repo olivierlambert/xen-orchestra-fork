@@ -1,45 +1,117 @@
 <template>
-  <label class="project-switcher">
-    <VtsIcon name="fa:layer-group" size="medium" />
-    <span class="sr-only">Project</span>
-    <select v-model="store.currentProjectId" class="select typo-body-bold">
-      <option v-for="project of store.projects" :key="project.id" :value="project.id">{{ project.name }}</option>
-    </select>
-  </label>
+  <PMenu class="project-switcher">
+    <template #trigger="{ open }">
+      <button type="button" class="current" :aria-expanded="open">
+        <span class="mark">{{ store.organization.name.slice(0, 1) }}</span>
+        <span class="names">
+          <span class="org p-caption">{{ store.organization.name }}</span>
+          <span class="project typo-body-bold-small">{{ store.project?.name ?? 'No project' }}</span>
+        </span>
+        <PIcon :icon="faChevronDown" size="small" class="chevron" :class="{ open }" />
+      </button>
+    </template>
+    <div class="menu-head p-eyebrow">Projects</div>
+    <PMenuItem
+      v-for="project of store.projects"
+      :key="project.id"
+      :icon="faLayerGroup"
+      :active="project.id === store.currentProjectId"
+      :hint="ROLE_LABELS[project.role]"
+      @click="select(project.id)"
+    >
+      {{ project.name }}
+    </PMenuItem>
+  </PMenu>
 </template>
 
 <script lang="ts" setup>
+import PIcon from '@/components/ui/PIcon.vue'
+import PMenu from '@/components/ui/PMenu.vue'
+import PMenuItem from '@/components/ui/PMenuItem.vue'
 import { usePortalStore } from '@/stores/portal.store.ts'
-import VtsIcon from '@core/components/icon/VtsIcon.vue'
+import { faChevronDown, faLayerGroup } from '@fortawesome/free-solid-svg-icons'
+import { useRouter } from 'vue-router'
 
 const store = usePortalStore()
+const router = useRouter()
+
+const ROLE_LABELS = { viewer: 'Viewer', member: 'Member', admin: 'Admin' } as const
+
+function select(id: string) {
+  if (id !== store.currentProjectId) {
+    store.currentProjectId = id
+    router.push('/dashboard')
+  }
+}
 </script>
 
 <style lang="postcss" scoped>
 .project-switcher {
+  width: 100%;
+
+  :deep(.panel) {
+    width: 100%;
+  }
+}
+
+.current {
   display: flex;
   align-items: center;
-  gap: 0.8rem;
-  padding: 0.4rem 0.8rem;
-  border: 0.1rem solid var(--color-neutral-border);
-  border-radius: 0.4rem;
-  background-color: var(--color-neutral-background-primary);
-  color: var(--color-neutral-txt-secondary);
+  gap: 1rem;
+  width: 100%;
+  padding: 0.8rem 1rem;
+  border: var(--p-border);
+  border-radius: var(--p-radius-m);
+  background-color: var(--p-surface);
+  color: var(--p-text);
+  cursor: pointer;
+  text-align: start;
 
-  .select {
-    border: none;
-    background: transparent;
-    color: var(--color-neutral-txt-primary);
-    cursor: pointer;
-    outline: none;
+  &:hover {
+    border-color: color-mix(in srgb, var(--color-brand-item-base) 45%, var(--color-neutral-border));
   }
+}
 
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
+.mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.2rem;
+  height: 3.2rem;
+  border-radius: var(--p-radius-s);
+  background: linear-gradient(135deg, #f59e0b, #ef4444);
+  color: #fff;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.names {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+
+  > span {
     overflow: hidden;
-    clip: rect(0 0 0 0);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
+}
+
+.org {
+  color: var(--p-muted);
+}
+
+.chevron {
+  color: var(--p-muted);
+  transition: transform 0.15s;
+
+  &.open {
+    transform: rotate(180deg);
+  }
+}
+
+.menu-head {
+  padding: 0.6rem 1rem;
 }
 </style>

@@ -1,6 +1,17 @@
-import { ensureConsoleCookie, login as xoLogin, logout as xoLogout, projectFilter, xo, XoApiError } from '@/api/xo.ts'
+import {
+  clearSession,
+  ensureConsoleCookie,
+  login as xoLogin,
+  logout as xoLogout,
+  projectFilter,
+  xo,
+  XoApiError,
+} from '@/api/xo.ts'
 import * as data from '@/mock/data.ts'
 import type {
+  ActivityEvent,
+  BillingMode,
+  ActivityKind,
   ApiKey,
   BackupPolicy,
   FirewallRule,
@@ -25,7 +36,7 @@ import type {
   UsageLine,
   User,
 } from '@/mock/types.ts'
-import { setCurrency } from '@/utils/format.ts'
+import { formatCron, setCurrency } from '@/utils/format.ts'
 import { useIntervalFn, useLocalStorage } from '@vueuse/core'
 import { defineStore } from 'pinia'
 import { computed, reactive, ref, watch } from 'vue'
@@ -83,7 +94,7 @@ type XoProjectDetails = {
       poolId: string
       disks: { userdevice: string; size: number }[]
     }[]
-    networks: { id: string; name: string; poolId: string }[]
+    networks: { id: string; name: string; poolId: string; description?: string; publicIpv4?: boolean }[]
     srs: { id: string; name: string; poolId: string; size: number; usage: number }[]
     offerings: {
       id: string
@@ -104,7 +115,8 @@ type XoVm = {
   CPUs: { number: number }
   memory: { size: number; dynamic: [number, number] }
   mainIpAddress?: string
-  creation?: { date?: string }
+  addresses?: Record<string, string>
+  creation?: { date?: string; template?: string; user?: string }
   other?: Record<string, string>
   tags: string[]
 }
@@ -129,7 +141,12 @@ type XoUsageRecord = {
   snapshotsPhysicalSize: number
 }
 
-type XoBackupPolicy = { id: string; name: string; tag: string }
+type XoBackupPolicy = {
+  id: string
+  name: string
+  tag: string
+  schedules?: { cron: string; timezone?: string; retention: number }[]
+}
 
 type XoAccount = {
   id: string
@@ -143,6 +160,22 @@ const VM_STATES: Record<XoVm['power_state'], InstanceState> = {
   Halted: 'halted',
   Paused: 'paused',
   Suspended: 'halted',
+}
+
+const DISTRIBUTIONS =
+  /^(debian|ubuntu|rocky linux|rocky|almalinux|alma linux|windows server|windows)\s*([\d.]+(?:\s*LTS)?)?/i
+
+/** "Debian 13 Cloud-init (Hub)" → { name: "Debian", version: "13" }, other names are kept */
+function imageName(name: string): { name: string; version: string } {
+  const match = DISTRIBUTIONS.exec(name.trim())
+  if (match === null) {
+    return { name: name.replace(/\s*\(hub\)\s*$/i, ''), version: '' }
+  }
+  const distribution = match[1]
+  return {
+    name: distribution[0].toUpperCase() + distribution.slice(1),
+    version: match[2]?.trim() ?? '',
+  }
 }
 
 function guessOs(name: string): TemplateOs {
@@ -204,10 +237,11 @@ export const usePortalStore = defineStore('portal', () => {
   const inProject = <T extends { projectId: string }>(items: T[]) =>
     items.filter(item => item.projectId === currentProjectId.value)
 
-  const projectInstances = computed(() => inProject(instances.value))
+  const projectInstances = computed(() =>
+    inProject(instances.value).sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }))
+  )
   const projectNetworks = computed(() => inProject(networks.value))
   const projectFloatingIps = computed(() => inProject(floatingIps.value))
-  const projectActivity = computed(() => inProject(activity.value).sort((a, b) => b.at - a.at))
 
   const projectInstanceIds = computed(() => new Set(projectInstances.value.map(instance => instance.id)))
   const projectSnapshots = computed(() =>
@@ -221,14 +255,16 @@ export const usePortalStore = defineStore('portal', () => {
     isLive.value
       ? (liveProject.value?.resources.templates ?? []).map(template => ({
           id: template.id,
-          name: template.name,
+          ...imageName(template.name),
           os: guessOs(template.name),
-          version: '',
           minDiskGiB: Math.max(0, ...template.disks.map(disk => toGiB(disk.size))),
           cloudInit: !/windows/i.test(template.name),
         }))
       : data.templates
   )
+
+  /** public addresses exist for the project: always in the mock (previews), from IP pools in live mode */
+  const showsPublicIps = computed(() => !isLive.value || hasPublicIpPools.value)
 
   /** with offerings, the project only creates instances of these sizes */
   const hasProjectOfferings = computed(() => isLive.value && (liveProject.value?.resources.offerings.length ?? 0) !== 0)
@@ -251,14 +287,22 @@ export const usePortalStore = defineStore('portal', () => {
 
   const backupPolicies = computed<BackupPolicy[]>(() =>
     isLive.value
-      ? liveBackupPolicies.value.map(policy => ({
-          id: policy.id,
-          name: policy.name,
-          description: 'Defined by your provider',
-          schedule: '',
-          retention: 0,
-          pricePerGiBMonth: provider.value.prices.storagePerGiBMonth,
-        }))
+      ? liveBackupPolicies.value.map(policy => {
+          const schedules = policy.schedules ?? []
+          const schedule = schedules.map(schedule => formatCron(schedule.cron)).join(', ')
+          const retention = Math.max(0, ...schedules.map(schedule => schedule.retention))
+          return {
+            id: policy.id,
+            name: policy.name,
+            description:
+              schedules.length === 0
+                ? 'On demand, run by your provider'
+                : `${schedule}, keeps ${retention} restore point${retention === 1 ? '' : 's'}`,
+            schedule: schedules.length === 0 ? 'On demand' : schedule,
+            retention,
+            pricePerGiBMonth: provider.value.prices.storagePerGiBMonth,
+          }
+        })
       : data.backupPolicies
   )
 
@@ -275,6 +319,56 @@ export const usePortalStore = defineStore('portal', () => {
   const getNetwork = (id: string) => networks.value.find(network => network.id === id)
   const getInstance = (id: string) => instances.value.find(instance => instance.id === id)
   const getBackupPolicy = (id: string | undefined) => backupPolicies.value.find(policy => policy.id === id)
+
+  // live mode: the history comes from XO (creations, snapshots, backups), completed by the actions of this session
+  const liveActivity = computed<ActivityEvent[]>(() => {
+    if (!isLive.value) {
+      return []
+    }
+    const projectId = currentProjectId.value
+    const memberName = (id: string | undefined) =>
+      organizationMembers.value.find(member => member.userId === id)?.name ?? ''
+    const instanceName = (id: string) => instances.value.find(instance => instance.id === id)?.name ?? 'an instance'
+    return [
+      ...instances.value.map(
+        (instance): ActivityEvent => ({
+          id: `create-${instance.id}`,
+          projectId,
+          at: instance.createdAt,
+          user: memberName(instance.createdBy),
+          message: `Created ${instance.name}`,
+          kind: 'create',
+          instanceId: instance.id,
+        })
+      ),
+      ...snapshots.value.map(
+        (snapshot): ActivityEvent => ({
+          id: `snapshot-${snapshot.id}`,
+          projectId,
+          at: snapshot.createdAt,
+          user: '',
+          message: `Snapshot “${snapshot.name}” of ${instanceName(snapshot.instanceId)}`,
+          kind: 'snapshot',
+          instanceId: snapshot.instanceId,
+        })
+      ),
+      ...restorePoints.value.map(
+        (point): ActivityEvent => ({
+          id: `backup-${point.id}`,
+          projectId,
+          at: point.createdAt,
+          user: provider.value.name,
+          message: `Backed up ${instanceName(point.instanceId)} (${getBackupPolicy(point.policyId)?.name ?? 'backup'})`,
+          kind: 'backup',
+          instanceId: point.instanceId,
+        })
+      ),
+    ]
+  })
+
+  const projectActivity = computed(() =>
+    [...inProject(activity.value), ...liveActivity.value].sort((a, b) => b.at - a.at)
+  )
 
   const instanceDiskGiB = (instance: Instance) =>
     instance.diskGiB ?? getOffering(instance.offeringId).diskGiB + instance.extraDiskGiB
@@ -333,14 +427,17 @@ export const usePortalStore = defineStore('portal', () => {
   const liveUsageLines = computed<UsageLine[]>(() => {
     const { prices } = provider.value
     const lines = new Map<string, UsageLine>()
-    const add = (line: Omit<UsageLine, 'quantity' | 'cost'>, quantity: number, cost: number) => {
+    const add = (line: Omit<UsageLine, 'quantity' | 'cost'>, quantity: number, cost: number, vcpuHours?: number) => {
       const key = `${line.category}/${line.resourceId}`
       const existing = lines.get(key)
       if (existing === undefined) {
-        lines.set(key, { ...line, quantity, cost })
+        lines.set(key, { ...line, quantity, cost, ...(vcpuHours !== undefined && { vcpuHours }) })
       } else {
         existing.quantity += quantity
         existing.cost += cost
+        if (vcpuHours !== undefined) {
+          existing.vcpuHours = (existing.vcpuHours ?? 0) + vcpuHours
+        }
       }
     }
 
@@ -358,20 +455,37 @@ export const usePortalStore = defineStore('portal', () => {
               resourceId: vm.id,
               resourceName: `${vm.name} (${vm.cpus} vCPU, ${memoryGiB} GiB)`,
               unit: 'h',
+              instanceId: vm.id,
+              instanceName: vm.name,
             },
             hours,
-            hours * price
+            hours * price,
+            hours * vm.cpus
           )
         }
         const diskMonths = (toGiB(vm.disk) * hours) / HOURS_PER_MONTH
         add(
-          { category: 'storage', resourceId: vm.id, resourceName: `${vm.name} disks`, unit: 'GiB·month' },
+          {
+            category: 'storage',
+            resourceId: vm.id,
+            resourceName: `${vm.name} disks`,
+            unit: 'GiB·month',
+            instanceId: vm.id,
+            instanceName: vm.name,
+          },
           diskMonths,
           diskMonths * prices.storagePerGiBMonth
         )
         for (const ip of vm.ips) {
           add(
-            { category: 'floating-ips', resourceId: ip, resourceName: `${ip} (${vm.name})`, unit: 'h' },
+            {
+              category: 'floating-ips',
+              resourceId: ip,
+              resourceName: `${ip} (${vm.name})`,
+              unit: 'h',
+              instanceId: vm.id,
+              instanceName: vm.name,
+            },
             hours,
             hours * prices.ipPerHour
           )
@@ -409,6 +523,9 @@ export const usePortalStore = defineStore('portal', () => {
         quantity: hours,
         unit: 'h',
         cost: hours * offering.pricePerHour,
+        vcpuHours: hours * offering.vcpus,
+        instanceId: instance.id,
+        instanceName: instance.name,
       })
 
       const diskGiB = instanceDiskGiB(instance)
@@ -420,6 +537,8 @@ export const usePortalStore = defineStore('portal', () => {
         quantity: diskGiB * storageMonths,
         unit: 'GiB·month',
         cost: diskGiB * storageMonths * prices.storagePerGiBMonth,
+        instanceId: instance.id,
+        instanceName: instance.name,
       })
 
       const policy = getBackupPolicy(instance.backupPolicyId)
@@ -434,6 +553,8 @@ export const usePortalStore = defineStore('portal', () => {
           quantity: backupGiB * monthFraction,
           unit: 'GiB·month',
           cost: backupGiB * monthFraction * policy.pricePerGiBMonth,
+          instanceId: instance.id,
+          instanceName: instance.name,
         })
       }
     }
@@ -469,6 +590,84 @@ export const usePortalStore = defineStore('portal', () => {
 
   const monthToDateCost = computed(() => usageLines.value.reduce((sum, line) => sum + line.cost, 0))
 
+  // --- Billing mode: the organization's, otherwise the default of the provider
+
+  const billingMode = computed<BillingMode>(() => organization.value.billing ?? provider.value.billing ?? 'billing')
+  /** whether money appears at all: internal entities without costs only see resources */
+  const showsCosts = computed(() => billingMode.value !== 'none')
+
+  /** vCPU-hours of the month so far, the headline figure without costs */
+  const monthVcpuHours = computed(() => usageLines.value.reduce((sum, line) => sum + (line.vcpuHours ?? 0), 0))
+
+  /** cumulative vCPU-hours at the end of each day of the month so far */
+  const dailyVcpuHours = computed<number[]>(() => {
+    const today = new Date().getDate()
+    const perDay = Array.from({ length: today }, () => 0)
+    if (isLive.value) {
+      const records = usageRecords.value
+      records.forEach((record, index) => {
+        const hours = Math.min(((records[index + 1]?.at ?? Date.now()) - record.at) / 3600e3, 2)
+        const day = new Date(record.at).getDate() - 1
+        if (day < perDay.length) {
+          perDay[day] += record.vms.reduce((sum, vm) => sum + (vm.powerState === 'Running' ? vm.cpus * hours : 0), 0)
+        }
+      })
+    } else {
+      perDay.fill(monthVcpuHours.value / today)
+    }
+    let total = 0
+    return perDay.map(value => (total += value))
+  })
+
+  const forecastVcpuHours = computed(() => {
+    const now = new Date()
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime()
+    const runningVcpus = projectInstances.value
+      .filter(instance => instance.state !== 'halted')
+      .reduce((sum, instance) => sum + getOffering(instance.offeringId).vcpus, 0)
+    return monthVcpuHours.value + ((end - now.getTime()) / 3600e3) * runningVcpus
+  })
+
+  const daysInMonth = computed(() => {
+    const now = new Date()
+    return new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+  })
+
+  /** cumulative cost at the end of each day of the month so far, for the spend chart */
+  const dailySpend = computed<number[]>(() => {
+    const today = new Date().getDate()
+    const perDay = Array.from({ length: today }, () => 0)
+    if (isLive.value) {
+      const { prices } = provider.value
+      const records = usageRecords.value
+      records.forEach((record, index) => {
+        const hours = Math.min(((records[index + 1]?.at ?? Date.now()) - record.at) / 3600e3, 2)
+        let cost = ((record.snapshotsPhysicalSize / GiB) * hours * prices.snapshotPerGiBMonth) / HOURS_PER_MONTH
+        for (const vm of record.vms) {
+          if (vm.powerState === 'Running') {
+            cost += hours * priceOf(vm.cpus, toGiB(vm.memory))
+          }
+          cost += (toGiB(vm.disk) * hours * prices.storagePerGiBMonth) / HOURS_PER_MONTH
+          cost += vm.ips.length * hours * prices.ipPerHour
+        }
+        const day = new Date(record.at).getDate() - 1
+        if (day < perDay.length) {
+          perDay[day] += cost
+        }
+      })
+    } else {
+      perDay.fill(monthToDateCost.value / today)
+    }
+    let total = 0
+    return perDay.map(value => (total += value))
+  })
+
+  /** month to date cost of one instance, all categories */
+  const instanceMonthCost = (instanceId: string) =>
+    usageLines.value
+      .filter(line => (line.instanceId ?? line.resourceId) === instanceId)
+      .reduce((sum, line) => sum + line.cost, 0)
+
   const estimatedHourlyCost = computed(() => {
     const { prices } = provider.value
     return (
@@ -478,6 +677,13 @@ export const usePortalStore = defineStore('portal', () => {
       usage.value.floatingIps * prices.ipPerHour +
       (usage.value.storageGiB * prices.storagePerGiBMonth) / HOURS_PER_MONTH
     )
+  })
+
+  /** month-end projection: what is spent plus the current rate until the end of the month */
+  const forecastCost = computed(() => {
+    const now = new Date()
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime()
+    return monthToDateCost.value + ((end - now.getTime()) / 3600e3) * estimatedHourlyCost.value
   })
 
   // --- Members and roles
@@ -516,13 +722,19 @@ export const usePortalStore = defineStore('portal', () => {
     }
   }
 
-  function log(message: string) {
+  function log(message: string, kind: ActivityKind = 'other', instanceId?: string) {
+    // in live mode, XO is the source of the creations, snapshots and backups
+    if (isLive.value && (kind === 'create' || kind === 'snapshot')) {
+      return
+    }
     activity.value.push({
       id: uid('ev'),
       projectId: currentProjectId.value,
       at: Date.now(),
       user: currentUser.value.name,
       message,
+      kind,
+      instanceId,
     })
   }
 
@@ -554,10 +766,15 @@ export const usePortalStore = defineStore('portal', () => {
   function toInstance(vm: XoVm, vifs: XoVif[]): Instance {
     // allocated memory: `size` is the actual usage of running VMs
     const memoryGiB = toGiB(vm.memory.dynamic[1])
+    // XO records the template of the creation; base_template_name is inherited from the template's own origin
+    const templates = liveProject.value?.resources.templates ?? []
     const baseTemplate = vm.other?.base_template_name ?? ''
-    const template = liveProject.value?.resources.templates.find(template => template.name === baseTemplate)
+    const template =
+      templates.find(template => template.uuid === vm.creation?.template) ??
+      templates.find(template => template.name === baseTemplate)
     const createdAt = Date.parse(vm.creation?.date ?? '')
     const ownVifs = vifs.filter(vif => vif.$VM === vm.id)
+    const publicIps = ownVifs.flatMap(vif => vif.allowedIpv4Addresses ?? [])
 
     return {
       id: vm.id,
@@ -567,14 +784,27 @@ export const usePortalStore = defineStore('portal', () => {
       offeringId: getOfferingId(vm.CPUs.number, memoryGiB),
       templateId: template?.id ?? `unknown:${baseTemplate}`,
       networkId: ownVifs[0]?.$network ?? '',
-      privateIp: vm.mainIpAddress ?? '',
-      publicIps: ownVifs.flatMap(vif => vif.allowedIpv4Addresses ?? []),
+      privateIp: privateAddress(vm, publicIps),
+      publicIps,
       extraDiskGiB: 0,
       diskGiB: knownDiskSizes.get(vm.id),
       backupPolicyId: liveBackupPolicies.value.find(policy => vm.tags.includes(policy.tag))?.id,
       sshKeyIds: [],
       createdAt: Number.isNaN(createdAt) ? Date.now() : createdAt,
+      createdBy: vm.creation?.user,
     }
+  }
+
+  /** the guest reports all its addresses: the private one is an IPv4 which is not a public IP of the project */
+  function privateAddress(vm: XoVm, publicIps: string[]) {
+    const ipv4 = Object.entries(vm.addresses ?? {})
+      .filter(([key]) => key.includes('/ipv4/'))
+      .map(([, address]) => address)
+      .filter(address => !publicIps.includes(address))
+    if (ipv4.length !== 0) {
+      return ipv4[0]
+    }
+    return vm.mainIpAddress !== undefined && !publicIps.includes(vm.mainIpAddress) ? vm.mainIpAddress : ''
   }
 
   async function refreshProject() {
@@ -594,8 +824,10 @@ export const usePortalStore = defineStore('portal', () => {
         name: network.name,
         cidr: '',
         gateway: '',
-        dhcp: false,
+        dhcp: !network.publicIpv4,
         routerState: 'running',
+        description: network.description,
+        publicIpv4: network.publicIpv4,
       })
     )
   }
@@ -605,7 +837,7 @@ export const usePortalStore = defineStore('portal', () => {
     const filter = projectFilter(id)
     const [vms, vmSnapshots, vifs] = await Promise.all([
       xo.get<XoVm[]>(
-        `/vms?fields=id,name_label,power_state,CPUs,memory,mainIpAddress,creation,other,tags&filter=${filter}`
+        `/vms?fields=id,name_label,power_state,CPUs,memory,mainIpAddress,addresses,creation,other,tags&filter=${filter}`
       ),
       xo.get<XoVmSnapshot[]>(`/vm-snapshots?fields=id,name_label,snapshot_time,$snapshot_of&filter=${filter}`),
       xo.get<XoVif[]>(`/vifs?fields=id,$VM,$network,allowedIpv4Addresses&filter=${filter}`),
@@ -797,6 +1029,8 @@ export const usePortalStore = defineStore('portal', () => {
     } catch (error) {
       if (error instanceof XoApiError && error.status === 401) {
         backend.value = 'xo'
+        // a stale session cookie would also be refused on the public routes
+        clearSession()
         await loadProvider()
         status.value = 'login'
         return
@@ -892,7 +1126,7 @@ export const usePortalStore = defineStore('portal', () => {
           }),
         })
 
-        log(`Created instance ${params.name}`)
+        log(`Created ${params.name}`, 'create')
         if (params.backupPolicyId !== undefined) {
           await xo.put(`/projects/${currentProjectId.value}/vms/${id}/backup-policy`, {
             policyId: params.backupPolicyId,
@@ -915,7 +1149,7 @@ export const usePortalStore = defineStore('portal', () => {
       createdAt: Date.now(),
     }
     instances.value.push(instance)
-    log(`Created instance ${instance.name}`)
+    log(`Created ${instance.name}`, 'create', instance.id)
     setTimeout(() => setState(instance.id, 'running'), 4000)
     return instance
   }
@@ -939,7 +1173,7 @@ export const usePortalStore = defineStore('portal', () => {
       await guard(async () => {
         try {
           await xo.post(`/vms/${id}/actions/${POWER_ACTIONS[action]}?sync=true`)
-          log(label)
+          log(label, 'power', id)
         } catch (error) {
           if (action === 'start' || !(error instanceof XoApiError) || !error.message.includes('VM_LACKS_FEATURE')) {
             throw error
@@ -949,7 +1183,7 @@ export const usePortalStore = defineStore('portal', () => {
           if (action === 'reboot' || getInstance(id)?.state !== 'halted') {
             await xo.post(`/vms/${id}/actions/${FORCED_POWER_ACTIONS[action]}?sync=true`)
           }
-          log(`${label} (forced, the instance has no guest tools)`)
+          log(`${label} (forced, the instance has no guest tools)`, 'power', id)
         }
         await refreshInstances()
       })
@@ -958,7 +1192,7 @@ export const usePortalStore = defineStore('portal', () => {
 
     await wait(600)
     instance.state = action === 'stop' ? 'halted' : 'running'
-    log(label)
+    log(label, 'power', id)
   }
 
   function forgetInstance(id: string) {
@@ -979,7 +1213,7 @@ export const usePortalStore = defineStore('portal', () => {
       return guard(async () => {
         await xo.delete(`/vms/${id}`)
         forgetInstance(id)
-        log(`Deleted instance ${instance.name}`)
+        log(`Deleted ${instance.name}`, 'delete')
         await refreshProject()
         return true
       })
@@ -987,7 +1221,7 @@ export const usePortalStore = defineStore('portal', () => {
 
     await wait(400)
     forgetInstance(id)
-    log(`Deleted instance ${instance.name}`)
+    log(`Deleted ${instance.name}`, 'delete')
     return true
   }
 
@@ -1015,7 +1249,7 @@ export const usePortalStore = defineStore('portal', () => {
       await guard(async () => {
         // through the project: snapshots count in its quota
         await xo.post(`/projects/${currentProjectId.value}/vms/${instanceId}/actions/snapshot`, { name_label: name })
-        log(`Snapshot ${name} of ${instance.name}`)
+        log(`Snapshot “${name}” of ${instance.name}`, 'snapshot', instance.id)
         await Promise.all([refreshProject(), refreshInstances()])
       })
       return
@@ -1029,7 +1263,7 @@ export const usePortalStore = defineStore('portal', () => {
       createdAt: Date.now(),
       sizeGiB: Math.round(instanceDiskGiB(instance) * 0.15),
     })
-    log(`Snapshot ${name} of ${instance.name}`)
+    log(`Snapshot “${name}” of ${instance.name}`, 'snapshot', instance.id)
   }
 
   async function revertSnapshot(snapshotId: string) {
@@ -1040,7 +1274,7 @@ export const usePortalStore = defineStore('portal', () => {
       instance.state = 'restoring'
       await guard(async () => {
         await xo.post(`/vms/${instance.id}/actions/revert_snapshot?sync=true`, { snapshotId })
-        log(`Reverted ${instance.name} to snapshot ${snapshot.name}`)
+        log(`Reverted ${instance.name} to “${snapshot.name}”`, 'restore', instance.id)
       })
       await guard(refreshInstances)
       return
@@ -1049,7 +1283,7 @@ export const usePortalStore = defineStore('portal', () => {
     instance.state = 'restoring'
     await wait(2000)
     instance.state = 'running'
-    log(`Reverted ${instance.name} to snapshot ${snapshot.name}`)
+    log(`Reverted ${instance.name} to “${snapshot.name}”`, 'restore', instance.id)
   }
 
   async function deleteSnapshot(snapshotId: string) {
@@ -1112,7 +1346,7 @@ export const usePortalStore = defineStore('portal', () => {
           restorePoint: restorePointId,
           sr: sr.id,
         })
-        log(`Restored ${instance?.name ?? 'an instance'} from the backup of ${date} as a new instance`)
+        log(`Restored ${instance?.name ?? 'an instance'} from the backup of ${date} as a new instance`, 'restore')
         await Promise.all([refreshProject(), refreshInstances()])
         return getInstance(id)
       })
@@ -1120,7 +1354,7 @@ export const usePortalStore = defineStore('portal', () => {
 
     if (mode === 'in-place') {
       instance!.state = 'restoring'
-      log(`Restoring ${instance!.name} from backup of ${date}`)
+      log(`Restoring ${instance!.name} from the backup of ${date}`, 'restore', instance!.id)
       await wait(3000)
       instance!.state = 'running'
       return instance
@@ -1227,7 +1461,7 @@ export const usePortalStore = defineStore('portal', () => {
           expiresIn: '180 days',
           password,
         })
-        log(`Created API key ${name}`)
+        log(`Created API key ${name}`, 'access')
         await refreshAccountData()
         return token
       })
@@ -1242,7 +1476,7 @@ export const usePortalStore = defineStore('portal', () => {
       createdAt: Date.now(),
       lastUsedAt: undefined,
     })
-    log(`Created API key ${name}`)
+    log(`Created API key ${name}`, 'access')
     return secret
   }
 
@@ -1256,7 +1490,7 @@ export const usePortalStore = defineStore('portal', () => {
     } else {
       apiKeys.value = apiKeys.value.filter(item => item.id !== id)
     }
-    log(`Revoked API key ${key.name}`)
+    log(`Revoked API key ${key.name}`, 'access')
   }
 
   async function addSshKey(name: string, publicKey: string) {
@@ -1424,10 +1658,20 @@ export const usePortalStore = defineStore('portal', () => {
     loadUsageRecords,
     monthToDateCost,
     estimatedHourlyCost,
+    billingMode,
+    showsCosts,
+    monthVcpuHours,
+    dailyVcpuHours,
+    forecastVcpuHours,
+    daysInMonth,
+    dailySpend,
+    forecastCost,
+    instanceMonthCost,
     templates,
     offerings,
     hasProjectOfferings,
     hasPublicIpPools,
+    showsPublicIps,
     backupPolicies,
     instances: projectInstances,
     networks: projectNetworks,

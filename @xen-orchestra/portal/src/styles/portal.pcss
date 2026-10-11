@@ -1,0 +1,146 @@
+/*
+ * Portal design layer on top of the XO 6 tokens: spacing, radii, elevation and a few utilities.
+ * Colors always come from the web-core tokens, so that dark mode and the provider brand color apply everywhere.
+ */
+:root {
+  --p-radius-s: 0.6rem;
+  --p-radius-m: 1rem;
+  --p-radius-l: 1.4rem;
+  --p-gap: 2rem;
+  --p-page-padding: 3.2rem;
+  --p-content-width: 128rem;
+  --p-border: 0.1rem solid var(--color-neutral-border);
+  --p-surface: var(--color-neutral-background-primary);
+  --p-canvas: color-mix(
+    in srgb,
+    var(--color-neutral-background-secondary) 70%,
+    var(--color-neutral-background-primary)
+  );
+  --p-elevation: 0 0.1rem 0.2rem rgba(16, 24, 40, 0.04), 0 0.1rem 0.3rem rgba(16, 24, 40, 0.06);
+  --p-elevation-high: 0 1.2rem 3.2rem -0.4rem rgba(16, 24, 40, 0.16), 0 0.4rem 0.8rem -0.2rem rgba(16, 24, 40, 0.06);
+  --p-mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --p-muted: var(--color-neutral-txt-secondary);
+  /* chips, tracks, hovers: one step above the surface */
+  --p-subtle: var(--color-neutral-background-secondary);
+  --p-text: var(--color-neutral-txt-primary);
+  --p-brand-soft: color-mix(in srgb, var(--color-brand-item-base) 10%, var(--p-surface));
+  --p-brand-softer: color-mix(in srgb, var(--color-brand-item-base) 5%, var(--p-surface));
+  --p-chart-1: var(--color-brand-item-base);
+  --p-chart-2: #14b8a6;
+  --p-chart-3: #f59e0b;
+  --p-chart-4: #a855f7;
+  --p-chart-5: #64748b;
+}
+
+:root.dark {
+  --p-elevation: 0 0 0 0.1rem rgba(255, 255, 255, 0.02);
+  --p-elevation-high: 0 1.6rem 4rem -0.4rem rgba(0, 0, 0, 0.6);
+  --p-canvas: color-mix(in srgb, var(--color-neutral-background-primary) 72%, #000);
+  --p-subtle: color-mix(in srgb, #ffffff 7%, var(--color-neutral-background-primary));
+  --p-brand-soft: color-mix(in srgb, var(--color-brand-item-base) 18%, var(--p-surface));
+  --p-brand-softer: color-mix(in srgb, var(--color-brand-item-base) 9%, var(--p-surface));
+}
+
+@media (max-width: 768px) {
+  :root {
+    --p-page-padding: 1.6rem;
+    --p-gap: 1.6rem;
+  }
+}
+
+body {
+  background-color: var(--p-canvas);
+}
+
+.p-mono {
+  font-family: var(--p-mono);
+  font-size: 0.92em;
+  letter-spacing: -0.01em;
+}
+
+.p-muted {
+  color: var(--p-muted);
+}
+
+.p-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.p-eyebrow {
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--p-muted);
+}
+
+.p-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* list rows used by the resource lists (instances, keys, members) */
+.p-list {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+
+  > li + li {
+    border-block-start: var(--p-border);
+  }
+}
+
+.p-link {
+  color: var(--color-brand-txt-base);
+  text-decoration: none;
+  font-weight: 500;
+
+  &:hover {
+    text-decoration: underline;
+    text-underline-offset: 0.3rem;
+  }
+}
+
+@keyframes p-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 0.6rem color-mix(in srgb, currentColor 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent);
+  }
+}
+
+@keyframes p-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(0.6rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+.p-caption {
+  font-size: 1.2rem;
+  line-height: 1.6rem;
+  font-weight: 400;
+}
