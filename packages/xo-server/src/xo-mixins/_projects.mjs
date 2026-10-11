@@ -94,8 +94,11 @@ export function getProjectRolePrivileges(projectId, role) {
 /**
  * Memory counts what is allocated (dynamic max), not `memory.size` which is the actual usage of running VMs.
  *
+ * Storage counts the virtual size of the disks of the instances only. Snapshots are limited by their number,
+ * like in most clouds: their actual footprint, the data their chain keeps alive, is for usage records.
+ *
  * @param {{ type: string, CPUs: { number: number }, memory: { size: number, dynamic?: number[] } }[]} vms objects of type VM or VM-snapshot
- * @param {{ size: number }[]} vdis objects of type VDI or VDI-snapshot
+ * @param {{ type: string, size: number }[]} vdis objects of type VDI or VDI-snapshot
  */
 export function computeProjectUsage(vms, vdis) {
   const usage = { instances: 0, vcpus: 0, memory: 0, storage: 0, snapshots: 0 }
@@ -109,7 +112,9 @@ export function computeProjectUsage(vms, vdis) {
     }
   }
   for (const vdi of vdis) {
-    usage.storage += vdi.size
+    if (vdi.type === 'VDI') {
+      usage.storage += vdi.size
+    }
   }
   return usage
 }
