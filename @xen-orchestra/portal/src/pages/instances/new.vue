@@ -6,8 +6,11 @@
         <UiCard>
           <UiCardTitle>1. Image</UiCardTitle>
           <div class="grid">
+            <VtsStateHero v-if="store.templates.length === 0" format="card" type="no-data" size="small">
+              No image available to this project yet
+            </VtsStateHero>
             <SelectCard
-              v-for="item of templates"
+              v-for="item of store.templates"
               :key="item.id"
               :selected="templateId === item.id"
               @click="templateId = item.id"
@@ -58,10 +61,10 @@
         <UiCard>
           <UiCardTitle>3. Network and storage</UiCardTitle>
           <div class="fields">
-            <FormField label="Network" for="network" info="Private network with DHCP, routed by the project router">
+            <FormField label="Network" for="network" :info="networkInfo">
               <NativeSelect id="network" v-model="networkId">
                 <option v-for="network of store.networks" :key="network.id" :value="network.id">
-                  {{ network.name }} ({{ network.cidr }})
+                  {{ network.name }}<template v-if="network.cidr"> ({{ network.cidr }})</template>
                 </option>
               </NativeSelect>
             </FormField>
@@ -76,7 +79,7 @@
             4. Access
             <template #description>Keys are injected with cloud-init at first boot</template>
           </UiCardTitle>
-          <div v-if="template.cloudInit" class="checkboxes">
+          <div v-if="template?.cloudInit" class="checkboxes">
             <UiCheckbox v-for="key of store.sshKeys" :key="key.id" v-model="sshKeyIds" :value="key.id" accent="brand">
               {{ key.name }} <span class="muted">{{ key.fingerprint }}</span>
             </UiCheckbox>
@@ -92,6 +95,7 @@
             5. Backups
             <template #description>Policies are defined by {{ PROVIDER.name }}. You can change this later.</template>
           </UiCardTitle>
+          <PreviewNotice />
           <div class="grid">
             <SelectCard :selected="backupPolicyId === undefined" @click="backupPolicyId = undefined">
               <span class="typo-body-bold">No backups</span>
@@ -120,7 +124,7 @@
         </FormField>
         <dl class="recap typo-body-regular">
           <dt class="muted">Image</dt>
-          <dd>{{ template.name }} {{ template.version }}</dd>
+          <dd>{{ template?.name }} {{ template?.version }}</dd>
           <dt class="muted">Size</dt>
           <dd>{{ offering.name }} ({{ offering.vcpus }} vCPU, {{ offering.memoryGiB }} GiB)</dd>
           <dt class="muted">Storage</dt>
@@ -156,11 +160,13 @@ import FormField from '@/components/FormField.vue'
 import NativeSelect from '@/components/NativeSelect.vue'
 import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
+import PreviewNotice from '@/components/PreviewNotice.vue'
 import SelectCard from '@/components/SelectCard.vue'
-import { backupPolicies, offerings, PROVIDER, templates } from '@/mock/data.ts'
+import { backupPolicies, offerings, PROVIDER } from '@/mock/data.ts'
 import type { Offering } from '@/mock/types.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
 import { formatHourlyPrice, formatMoney, formatMonthlyPrice } from '@/utils/format.ts'
+import VtsStateHero from '@core/components/state-hero/VtsStateHero.vue'
 import TabItem from '@core/components/tab/TabItem.vue'
 import TabList from '@core/components/tab/TabList.vue'
 import UiButton from '@core/components/ui/button/UiButton.vue'
@@ -170,7 +176,7 @@ import UiCheckbox from '@core/components/ui/checkbox/UiCheckbox.vue'
 import UiInfo from '@core/components/ui/info/UiInfo.vue'
 import UiInput from '@core/components/ui/input/UiInput.vue'
 import UiTag from '@core/components/ui/tag/UiTag.vue'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 const STORAGE_PRICE_PER_GIB_HOUR = 0.05 / 730
@@ -184,7 +190,7 @@ const families: { id: Offering['family']; label: string }[] = [
   { id: 'memory', label: 'Memory optimized' },
 ]
 
-const templateId = ref(templates[0].id)
+const templateId = ref(store.templates[0]?.id)
 const selectedFamily = ref<Offering['family']>('general')
 const offeringId = ref('g1.medium')
 const networkId = ref(store.networks[0]?.id)
@@ -194,14 +200,34 @@ const backupPolicyId = ref<string | undefined>(backupPolicies[0].id)
 const name = ref<string | number | undefined>(`instance-${store.instances.length + 1}`)
 const creating = ref(false)
 
-const template = computed(() => store.getTemplate(templateId.value))
+const template = computed(() => (templateId.value === undefined ? undefined : store.getTemplate(templateId.value)))
+
+// the live templates and networks arrive after the page may have been opened
+watch(
+  () => [store.templates, store.networks] as const,
+  ([templates, networks]) => {
+    if (!templates.some(item => item.id === templateId.value)) {
+      templateId.value = templates[0]?.id
+    }
+    if (!networks.some(item => item.id === networkId.value)) {
+      networkId.value = networks[0]?.id
+    }
+  }
+)
+
+const networkInfo = computed(() =>
+  store.backend === 'xo'
+    ? 'Networks made available to the project by your provider'
+    : 'Private network with DHCP, routed by the project router'
+)
 const offering = computed(() => store.getOffering(offeringId.value))
 const familyOfferings = computed(() => offerings.filter(offering => offering.family === selectedFamily.value))
 const extraDisk = computed(() => Math.max(0, Number(extraDiskGiB.value) || 0))
 
-const extraDiskInfo = computed(
-  () => `${formatMoney(0.05)}/GiB·month. ${store.quota.storageGiB - store.usage.storageGiB} GiB left in quota.`
-)
+const extraDiskInfo = computed(() => {
+  const left = store.quota.storageGiB - store.usage.storageGiB
+  return `${formatMoney(0.05)}/GiB·month. ${Number.isFinite(left) ? `${left} GiB left in quota.` : 'No storage quota.'}`
+})
 
 const hourlyPrice = computed(() => offering.value.pricePerHour + extraDisk.value * STORAGE_PRICE_PER_GIB_HOUR)
 
@@ -227,6 +253,7 @@ const quotaError = computed(() => {
 const canCreate = computed(
   () =>
     quotaError.value === undefined &&
+    templateId.value !== undefined &&
     networkId.value !== undefined &&
     /^[a-z0-9][a-z0-9-]*$/.test(String(name.value ?? '')) &&
     !creating.value
@@ -238,13 +265,15 @@ async function create() {
     const instance = await store.createInstance({
       name: String(name.value),
       offeringId: offeringId.value,
-      templateId: templateId.value,
+      templateId: templateId.value!,
       networkId: networkId.value!,
       extraDiskGiB: extraDisk.value,
       backupPolicyId: backupPolicyId.value,
-      sshKeyIds: template.value.cloudInit ? sshKeyIds.value : [],
+      sshKeyIds: template.value?.cloudInit ? sshKeyIds.value : [],
     })
-    await router.push(`/instances/${instance.id}`)
+    if (instance !== undefined) {
+      await router.push(`/instances/${instance.id}`)
+    }
   } finally {
     creating.value = false
   }

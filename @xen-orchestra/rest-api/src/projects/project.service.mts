@@ -1,9 +1,29 @@
-import type { XoNetwork, XoPool, XoProject, XoProjectRole, XoSr, XoUser, XoVif, XoVm, XoVmTemplate } from '@vates/types'
+import type {
+  XapiXoRecord,
+  XoNetwork,
+  XoPool,
+  XoProject,
+  XoProjectRole,
+  XoSr,
+  XoUser,
+  XoVbd,
+  XoVdi,
+  XoVif,
+  XoVm,
+  XoVmTemplate,
+} from '@vates/types'
 import { forbiddenOperation } from 'xo-common/api-errors.js'
 
 import type { RestApi } from '../rest-api/rest-api.mjs'
 import { VmService } from '../vms/vm.service.mjs'
-import type { ProjectCreateVmBody, ProjectDetails, ProjectMember, ProjectWithRole } from './project.type.mjs'
+import type {
+  ProjectCreateVmBody,
+  ProjectDetails,
+  ProjectMember,
+  ProjectTemplate,
+  ProjectWithRole,
+  ProjectResource,
+} from './project.type.mjs'
 
 export class ProjectService {
   #restApi: RestApi
@@ -34,7 +54,62 @@ export class ProjectService {
     }
     const project = await xoApp.getProject(id)
     const { usage } = await xoApp.getProjectUsage(id)
-    return { ...project, role, usage }
+    return { ...project, role, usage, resources: this.#getResources(project) }
+  }
+
+  #getResources({ scope }: XoProject): ProjectDetails['resources'] {
+    const restApi = this.#restApi
+    const resolve = <T extends XapiXoRecord, U>(ids: string[], type: T['type'], map: (object: T) => U): U[] =>
+      ids.flatMap(id => {
+        try {
+          return [map(restApi.getObject<T>(id as T['id'], type))]
+        } catch {
+          return []
+        }
+      })
+
+    return {
+      pools: resolve<XoPool, { id: string; name: string }>(scope.pools, 'pool', pool => ({
+        id: pool.id,
+        name: pool.name_label,
+      })),
+      templates: resolve<XoVmTemplate, ProjectTemplate>(scope.templates, 'VM-template', template => {
+        const disks = new Map<string, number>()
+        // the provisioning XML of default templates also has a `device` attribute, missing from the type
+        for (const disk of template.template_info.disks as { device?: string; size: number }[]) {
+          if (disk.device !== undefined) {
+            disks.set(String(disk.device), disk.size)
+          }
+        }
+        for (const vbdId of template.$VBDs) {
+          const vbd = restApi.getObject<XoVbd>(vbdId, 'VBD')
+          if (!vbd.is_cd_drive && vbd.VDI !== undefined) {
+            disks.set(vbd.position, restApi.getObject<XoVdi>(vbd.VDI as XoVdi['id'], 'VDI').size)
+          }
+        }
+        return {
+          id: template.id,
+          uuid: template.uuid,
+          name: template.name_label,
+          poolId: template.$pool,
+          cpus: template.CPUs.number,
+          memory: template.memory.size,
+          disks: Array.from(disks, ([userdevice, size]) => ({ userdevice, size })),
+        }
+      }),
+      networks: resolve<XoNetwork, ProjectResource>(scope.networks, 'network', network => ({
+        id: network.id,
+        name: network.name_label,
+        poolId: network.$pool,
+      })),
+      srs: resolve<XoSr, ProjectDetails['resources']['srs'][number]>(scope.srs, 'SR', sr => ({
+        id: sr.id,
+        name: sr.name_label,
+        poolId: sr.$pool,
+        size: sr.size,
+        usage: sr.usage,
+      })),
+    }
   }
 
   async getMembers(id: XoProject['id']): Promise<ProjectMember[]> {

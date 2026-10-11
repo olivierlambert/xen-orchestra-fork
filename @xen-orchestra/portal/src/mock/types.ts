@@ -12,6 +12,8 @@ export type Project = {
   organizationId: string
   name: string
   description: string
+  /** effective role of the current user */
+  role: ProjectRole
 }
 
 export type Quota = {
@@ -56,6 +58,8 @@ export type Instance = {
   networkId: string
   privateIp: string
   extraDiskGiB: number
+  /** actual total disk size when known (live mode), otherwise derived from the offering */
+  diskGiB?: number
   backupPolicyId: string | undefined
   sshKeyIds: string[]
   createdAt: number
@@ -137,6 +141,8 @@ export type SshKey = {
   name: string
   fingerprint: string
   createdAt: number
+  /** only known for keys added in this session, the others are not injected */
+  publicKey?: string
 }
 
 export type ActivityEvent = {
@@ -156,4 +162,27 @@ export type UsageLine = {
   quantity: number
   unit: string
   cost: number
+}
+
+export type ProjectRole = 'viewer' | 'member' | 'admin'
+
+export type OrganizationRole = 'member' | 'admin'
+
+export type User = {
+  id: string
+  name: string
+  /** XO administrators are provider staff, they see every project */
+  isAdmin: boolean
+}
+
+export type OrganizationMember = {
+  userId: string
+  name: string
+  role: OrganizationRole
+}
+
+export type ProjectMember = {
+  userId: string
+  name: string
+  role: ProjectRole
 }

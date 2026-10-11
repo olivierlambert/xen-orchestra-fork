@@ -8,13 +8,16 @@ import type {
   Network,
   Offering,
   Organization,
+  OrganizationMember,
   PortForward,
   Project,
+  ProjectMember,
   Quota,
   RestorePoint,
   Snapshot,
   SshKey,
   Template,
+  User,
 } from './types.ts'
 
 const HOUR = 3600e3
@@ -28,16 +31,41 @@ export const PROVIDER = {
   supportUrl: 'https://example.org/support',
 }
 
-export const currentUser = {
-  name: 'Camille Martin',
-  email: 'camille@acme.example',
+export const currentUser: User = { id: 'usr-camille', name: 'camille@acme.example', isAdmin: false }
+
+export const organizationMembers: OrganizationMember[] = [
+  { userId: 'usr-camille', name: 'camille@acme.example', role: 'admin' },
+  { userId: 'usr-leo', name: 'leo@acme.example', role: 'member' },
+  { userId: 'usr-sam', name: 'sam@acme.example', role: 'member' },
+  { userId: 'usr-noor', name: 'noor@acme.example', role: 'member' },
+]
+
+// Direct project roles. Organization admins are admins of every project without being listed here.
+export const projectMembers: Record<string, ProjectMember[]> = {
+  'prj-web': [
+    { userId: 'usr-leo', name: 'leo@acme.example', role: 'member' },
+    { userId: 'usr-sam', name: 'sam@acme.example', role: 'viewer' },
+  ],
+  'prj-data': [{ userId: 'usr-noor', name: 'noor@acme.example', role: 'admin' }],
 }
 
 export const organization: Organization = { id: 'org-acme', name: 'ACME Corp' }
 
 export const projects: Project[] = [
-  { id: 'prj-web', organizationId: 'org-acme', name: 'Web platform', description: 'Production websites and APIs' },
-  { id: 'prj-data', organizationId: 'org-acme', name: 'Data lab', description: 'Analytics and batch jobs' },
+  {
+    id: 'prj-web',
+    organizationId: 'org-acme',
+    name: 'Web platform',
+    description: 'Production websites and APIs',
+    role: 'admin',
+  },
+  {
+    id: 'prj-data',
+    organizationId: 'org-acme',
+    name: 'Data lab',
+    description: 'Analytics and batch jobs',
+    role: 'admin',
+  },
 ]
 
 export const quotas: Record<string, Quota> = {

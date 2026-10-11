@@ -1,6 +1,10 @@
 <template>
   <PageHeader title="Networking" icon="fa:network-wired" />
   <PageContent>
+    <PreviewNotice>
+      Preview: private networks below are the networks your provider made available to the project. Virtual routers,
+      public IPs, port forwarding and firewall rules are not in Xen Orchestra yet, changes stay in your browser.
+    </PreviewNotice>
     <!-- PRIVATE NETWORKS -->
     <UiCard>
       <UiCardTitle>
@@ -280,6 +284,7 @@ import FormField from '@/components/FormField.vue'
 import NativeSelect from '@/components/NativeSelect.vue'
 import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
+import PreviewNotice from '@/components/PreviewNotice.vue'
 import type { FirewallRule, Protocol } from '@/mock/types.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
 import TabItem from '@core/components/tab/TabItem.vue'

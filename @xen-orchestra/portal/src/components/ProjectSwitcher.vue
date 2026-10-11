@@ -3,13 +3,12 @@
     <VtsIcon name="fa:layer-group" size="medium" />
     <span class="sr-only">Project</span>
     <select v-model="store.currentProjectId" class="select typo-body-bold">
-      <option v-for="project of projects" :key="project.id" :value="project.id">{{ project.name }}</option>
+      <option v-for="project of store.projects" :key="project.id" :value="project.id">{{ project.name }}</option>
     </select>
   </label>
 </template>
 
 <script lang="ts" setup>
-import { projects } from '@/mock/data.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
 import VtsIcon from '@core/components/icon/VtsIcon.vue'
 

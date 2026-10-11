@@ -7,6 +7,10 @@
     </template>
   </PageHeader>
   <PageContent>
+    <PreviewNotice>
+      Preview: costs are estimated in your browser from the current resources of the project. Usage records will come
+      from Xen Orchestra.
+    </PreviewNotice>
     <div class="columns">
       <UiCard>
         <UiCardTitle>
@@ -60,6 +64,7 @@
 <script lang="ts" setup>
 import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
+import PreviewNotice from '@/components/PreviewNotice.vue'
 import { PROVIDER } from '@/mock/data.ts'
 import type { UsageCategory } from '@/mock/types.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'

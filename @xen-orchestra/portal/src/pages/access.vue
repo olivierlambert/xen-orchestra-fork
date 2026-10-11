@@ -1,6 +1,10 @@
 <template>
   <PageHeader title="API & SSH keys" icon="fa:lock" />
   <PageContent>
+    <PreviewNotice>
+      Preview: project-scoped API keys are not in Xen Orchestra yet. SSH keys added here are injected into the new
+      instances you create in this session.
+    </PreviewNotice>
     <UiCard>
       <UiCardTitle>
         API keys
@@ -139,6 +143,7 @@ import FormField from '@/components/FormField.vue'
 import NativeSelect from '@/components/NativeSelect.vue'
 import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
+import PreviewNotice from '@/components/PreviewNotice.vue'
 import type { ApiKey } from '@/mock/types.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
 import { formatDate } from '@/utils/format.ts'
@@ -185,7 +190,7 @@ const isSshKeyValid = computed(
 )
 
 function addSshKey() {
-  store.addSshKey(String(sshName.value).trim())
+  store.addSshKey(String(sshName.value).trim(), sshPublicKey.value.trim())
   sshName.value = ''
   sshPublicKey.value = ''
 }

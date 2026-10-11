@@ -28,9 +28,17 @@
       <div class="account">
         <span class="avatar typo-body-bold-small">{{ initials }}</span>
         <div class="account-text">
-          <span class="typo-body-bold-small">{{ currentUser.name }}</span>
-          <span class="typo-body-regular-small org">{{ organization.name }}</span>
+          <span class="typo-body-bold-small">{{ store.currentUser.name }}</span>
+          <span class="typo-body-regular-small org">{{ store.organization.name }}</span>
         </div>
+        <UiButtonIcon
+          v-if="store.backend === 'xo'"
+          v-tooltip="'Sign out'"
+          accent="brand"
+          size="medium"
+          icon="fa:arrow-right-from-bracket"
+          @click="store.logout()"
+        />
       </div>
     </template>
     <template #left-sidebar>
@@ -52,12 +60,18 @@
         <template #footer>
           <div class="prototype-notice typo-body-regular-small">
             <VtsIcon name="fa:info-circle" size="small" />
-            Prototype: all data is mocked
+            <template v-if="store.backend === 'xo'">
+              Connected to Xen Orchestra. Networking, backups, billing and API keys are previews.
+            </template>
+            <template v-else>Prototype: all data is mocked</template>
           </div>
         </template>
       </VtsLayoutSidebar>
     </template>
     <template #content>
+      <UiAlert v-if="store.lastError" accent="danger" close class="error" @close="store.lastError = undefined">
+        {{ store.lastError }}
+      </UiAlert>
       <slot />
     </template>
   </CoreLayout>
@@ -65,15 +79,19 @@
 
 <script lang="ts" setup>
 import ProjectSwitcher from '@/components/ProjectSwitcher.vue'
-import { currentUser, organization, PROVIDER } from '@/mock/data.ts'
+import { PROVIDER } from '@/mock/data.ts'
+import { usePortalStore } from '@/stores/portal.store.ts'
 import type { IconName } from '@core/icons'
 import VtsIcon from '@core/components/icon/VtsIcon.vue'
 import VtsLayoutSidebar from '@core/components/layout/VtsLayoutSidebar.vue'
+import UiAlert from '@core/components/ui/alert/UiAlert.vue'
 import UiButtonIcon from '@core/components/ui/button-icon/UiButtonIcon.vue'
 import UiLink from '@core/components/ui/link/UiLink.vue'
+import { vTooltip } from '@core/directives/tooltip.directive.ts'
 import CoreLayout from '@core/layouts/CoreLayout.vue'
 import { useLeftSidebarStore } from '@core/packages/sidebar'
 import { useUiStore } from '@core/stores/ui.store.ts'
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 
 defineSlots<{
@@ -82,6 +100,7 @@ defineSlots<{
 
 const leftSidebar = useLeftSidebarStore()
 const uiStore = useUiStore()
+const store = usePortalStore()
 
 // On small screens the sidebar overlays the content: close it after navigating
 useRouter().afterEach(() => {
@@ -90,16 +109,20 @@ useRouter().afterEach(() => {
   }
 })
 
-const initials = currentUser.name
-  .split(' ')
-  .map(part => part[0])
-  .join('')
+const initials = computed(() =>
+  store.currentUser.name
+    .split(/[\s@.]/)
+    .slice(0, 2)
+    .map(part => part[0]?.toUpperCase() ?? '')
+    .join('')
+)
 
 const navigation: { to: string; label: string; icon: IconName }[] = [
   { to: '/dashboard', label: 'Dashboard', icon: 'fa:display' },
   { to: '/instances', label: 'Instances', icon: 'fa:server' },
   { to: '/networks', label: 'Networking', icon: 'fa:network-wired' },
   { to: '/usage', label: 'Usage', icon: 'fa:file-csv' },
+  { to: '/members', label: 'Members', icon: 'object:organization' },
   { to: '/access', label: 'API & SSH keys', icon: 'fa:lock' },
 ]
 </script>
@@ -169,6 +192,10 @@ const navigation: { to: string; label: string; icon: IconName }[] = [
       background-color: var(--color-brand-background-selected);
       color: var(--color-brand-txt-base);
     }
+  }
+
+  .error {
+    margin: 1.6rem 1.6rem 0;
   }
 
   .prototype-notice {

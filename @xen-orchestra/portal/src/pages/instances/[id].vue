@@ -78,7 +78,9 @@
             <dt>Image</dt>
             <dd>{{ template.name }} {{ template.version }}</dd>
             <dt>Disks</dt>
-            <dd>
+            <dd v-if="instance.diskGiB !== undefined">{{ instance.diskGiB }} GiB in total</dd>
+            <dd v-else-if="store.backend === 'xo'" class="muted">Loading…</dd>
+            <dd v-else>
               {{ offering.diskGiB }} GiB system<template v-if="instance.extraDiskGiB">
                 + {{ instance.extraDiskGiB }} GiB data
               </template>
@@ -93,9 +95,10 @@
           <UiCardTitle>Network</UiCardTitle>
           <dl class="details typo-body-regular">
             <dt>Network</dt>
-            <dd>{{ network?.name }} ({{ network?.cidr }})</dd>
+            <dd v-if="network">{{ network.name }} ({{ network.cidr }})</dd>
+            <dd v-else>-</dd>
             <dt>Private IP</dt>
-            <dd>{{ instance.privateIp }}</dd>
+            <dd>{{ instance.privateIp || '-' }}</dd>
             <dt>Public IP</dt>
             <dd>{{ attachedIp?.address ?? 'None' }}</dd>
             <dt>Port forwards</dt>
@@ -146,7 +149,7 @@
               <VtsRow v-for="snap of instanceSnapshots" :key="snap.id">
                 <VtsTextCell>{{ snap.name }}</VtsTextCell>
                 <VtsTextCell>{{ formatDate(snap.createdAt) }}</VtsTextCell>
-                <VtsTextCell>{{ snap.sizeGiB }} GiB</VtsTextCell>
+                <VtsTextCell>{{ snap.sizeGiB ? `${snap.sizeGiB} GiB` : '-' }}</VtsTextCell>
                 <UiTableCell>
                   <div class="actions">
                     <UiButton
@@ -176,6 +179,7 @@
         </UiCard>
 
         <UiCard>
+          <PreviewNotice />
           <UiCardTitle>
             Backups
             <template #description>
@@ -268,6 +272,7 @@
 import InstanceStateTag from '@/components/InstanceStateTag.vue'
 import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
+import PreviewNotice from '@/components/PreviewNotice.vue'
 import SelectCard from '@/components/SelectCard.vue'
 import { backupPolicies, PROVIDER } from '@/mock/data.ts'
 import type { PortForward } from '@/mock/types.ts'
@@ -286,7 +291,7 @@ import UiCardTitle from '@core/components/ui/card-title/UiCardTitle.vue'
 import UiInfo from '@core/components/ui/info/UiInfo.vue'
 import UiInput from '@core/components/ui/input/UiInput.vue'
 import UiTableCell from '@core/components/ui/table-cell/UiTableCell.vue'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const store = usePortalStore()
@@ -314,6 +319,16 @@ const instance = computed(() => store.instances.find(instance => instance.id ===
 const offering = computed(() => store.getOffering(instance.value!.offeringId))
 const template = computed(() => store.getTemplate(instance.value!.templateId))
 const network = computed(() => store.getNetwork(instance.value!.networkId))
+watch(
+  () => instance.value?.id,
+  id => {
+    if (id !== undefined) {
+      store.loadInstanceDisks(id)
+    }
+  },
+  { immediate: true }
+)
+
 const isBusy = computed(() => instance.value?.state === 'creating' || instance.value?.state === 'restoring')
 
 const sshKeyNames = computed(() =>
@@ -352,8 +367,10 @@ async function power(action: 'start' | 'stop' | 'reboot') {
 }
 
 async function remove() {
-  await store.deleteInstance(instance.value!.id)
-  await router.push('/instances')
+  confirmDelete.value = false
+  if (await store.deleteInstance(instance.value!.id)) {
+    await router.push('/instances')
+  }
 }
 
 async function snapshot() {
@@ -373,7 +390,9 @@ function setPolicy(policyId: string | undefined) {
 
 async function restoreAsNew(pointId: string) {
   const created = await store.restore(pointId, 'new-instance')
-  await router.push(`/instances/${created.id}`)
+  if (created !== undefined) {
+    await router.push(`/instances/${created.id}`)
+  }
 }
 </script>
 

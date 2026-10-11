@@ -4,9 +4,9 @@
   </select>
 </template>
 
-<script lang="ts" setup>
+<script lang="ts" setup generic="T extends string | number | undefined">
 // Plain select styled like UiInput, simpler than VtsSelect for the prototype
-const model = defineModel<string | number | undefined>()
+const model = defineModel<T>()
 
 defineSlots<{
   default(): any

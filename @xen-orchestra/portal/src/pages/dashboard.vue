@@ -47,7 +47,7 @@
         </UiCardTitle>
         <div class="quotas">
           <VtsProgressBar
-            v-for="item of quotaItems"
+            v-for="item of limitedQuotaItems"
             :key="item.label"
             :label="item.label"
             :current="item.current"
@@ -55,6 +55,9 @@
             legend-type="value-with-total"
             no-ruler
           />
+          <span v-if="unlimitedQuotaItems.length !== 0" class="typo-body-regular-small muted">
+            No limit: {{ unlimitedQuotaItems.map(item => `${item.label} (${item.current} used)`).join(', ') }}
+          </span>
         </div>
       </UiCard>
 
@@ -99,12 +102,15 @@ const attachedIps = computed(
 
 const quotaItems = computed(() => [
   { label: 'Instances', current: store.usage.instances, total: store.quota.instances },
-  { label: 'vCPUs (running)', current: store.usage.vcpus, total: store.quota.vcpus },
-  { label: 'Memory GiB (running)', current: store.usage.memoryGiB, total: store.quota.memoryGiB },
+  { label: 'vCPUs', current: store.usage.vcpus, total: store.quota.vcpus },
+  { label: 'Memory GiB', current: store.usage.memoryGiB, total: store.quota.memoryGiB },
   { label: 'Storage GiB', current: store.usage.storageGiB, total: store.quota.storageGiB },
   { label: 'Public IPs', current: store.usage.floatingIps, total: store.quota.floatingIps },
   { label: 'Snapshots', current: store.usage.snapshots, total: store.quota.snapshots },
 ])
+
+const limitedQuotaItems = computed(() => quotaItems.value.filter(item => Number.isFinite(item.total)))
+const unlimitedQuotaItems = computed(() => quotaItems.value.filter(item => !Number.isFinite(item.total)))
 </script>
 
 <style lang="postcss" scoped>

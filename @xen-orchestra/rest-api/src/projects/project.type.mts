@@ -29,8 +29,35 @@ export type ProjectWithRole = Unbrand<XoProject> & {
   role: XoProjectRole
 }
 
+export type ProjectResource = {
+  id: string
+  name: string
+  poolId: string
+}
+
+export type ProjectTemplate = ProjectResource & {
+  /** to pass to `create_vm` */
+  uuid: string
+  cpus: number
+  /** in bytes */
+  memory: number
+  /** existing or provisioned disks, sizes in bytes */
+  disks: { userdevice: string; size: number }[]
+}
+
 export type ProjectDetails = ProjectWithRole & {
   usage: XoProjectUsage
+  /**
+   * Names and properties of the resources in the project scope, that tenants cannot read directly.
+   *
+   * Resources which do not exist anymore are omitted.
+   */
+  resources: {
+    pools: { id: string; name: string }[]
+    templates: ProjectTemplate[]
+    networks: ProjectResource[]
+    srs: (ProjectResource & { size: number; usage: number })[]
+  }
 }
 
 export type ProjectMember = {
