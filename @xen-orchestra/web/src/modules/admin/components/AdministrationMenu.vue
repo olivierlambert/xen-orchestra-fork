@@ -60,6 +60,14 @@ const sections = computed<AdminMenuSection[]>(() => [
       },
     ],
   },
+  {
+    titleKey: 'cloud',
+    items: [
+      { labelKey: 'organizations', href: undefined, to: { name: '/admin/cloud/organizations' } },
+      { labelKey: 'offerings', href: undefined, to: { name: '/admin/cloud/offerings' } },
+      { labelKey: 'ip-pools', href: undefined, to: { name: '/admin/cloud/ip-pools' } },
+    ],
+  },
 ])
 </script>
 

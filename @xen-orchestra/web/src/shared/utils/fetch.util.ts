@@ -65,3 +65,17 @@ export async function fetchGet<T>(endpoint: string): Promise<T> {
     method: 'GET',
   })
 }
+
+export async function fetchPatch<T = void>(endpoint: string, body?: unknown): Promise<T> {
+  return fetchRequest<T>(endpoint, {
+    method: 'PATCH',
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+}
+
+export async function fetchPut<T = void>(endpoint: string, body?: unknown): Promise<T> {
+  return fetchRequest<T>(endpoint, {
+    method: 'PUT',
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+}
