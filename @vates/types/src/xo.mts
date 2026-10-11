@@ -35,6 +35,8 @@ type BaseXapiXo = {
 }
 
 type BaseXoVm = BaseXapiXo & {
+  /** project owning the VM or snapshot (tenant model), not set on templates */
+  $project?: XoProject['id']
   $VBDs: XoVbd['id'][]
   $VGPUs: XoVgpu['id'][]
 
@@ -720,6 +722,45 @@ export type XoTask = {
   warnings?: { data: unknown; message: string }[]
 }
 
+export type XoOrganizationRole = 'member' | 'admin'
+
+export type XoOrganization = {
+  id: Branded<'organization'>
+  name: string
+  members: Record<XoUser['id'], XoOrganizationRole>
+}
+
+export type XoProjectRole = 'viewer' | 'member' | 'admin'
+
+export type XoProjectQuota = {
+  instances?: number
+  vcpus?: number
+  /** in bytes */
+  memory?: number
+  /** in bytes */
+  storage?: number
+  snapshots?: number
+}
+
+export type XoProjectUsage = Required<XoProjectQuota>
+
+export type XoProject = {
+  id: Branded<'project'>
+  organizationId: XoOrganization['id']
+  name: string
+  description: string
+  quota: XoProjectQuota
+  /** resources the project can use, an empty list means none */
+  scope: {
+    pools: XoPool['id'][]
+    templates: XoVmTemplate['id'][]
+    networks: XoNetwork['id'][]
+    srs: XoSr['id'][]
+  }
+  /** generated ACL v2 roles, one per project role */
+  roleIds: Record<XoProjectRole, XoAclRole['id']>
+}
+
 export type XoUser = {
   authProviders?: Record<string, string>
   email: string
@@ -764,6 +805,8 @@ export type XoVbd = BaseXapiXo & {
 }
 
 type BaseXoVdi = BaseXapiXo & {
+  /** project owning the VDI (tenant model) */
+  $project?: XoProject['id']
   $SR: XoSr['id']
   $VBDs: XoVbd['id'][]
 

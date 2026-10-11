@@ -16,6 +16,8 @@ import {
   XoVmController,
   XoVmSnapshot,
   type XenApiVdiWrapped,
+  type XenApiVmWrapped,
+  type XoProject,
   type XoPool,
   type XoVdi,
   type XoVm,
@@ -36,6 +38,9 @@ import { BackupLogService } from '../backup-logs/backup-log.service.mjs'
 
 const log = createLogger('xo:rest-api:vm-service')
 
+/** same key as in xo-server, where the `$project` property of VMs and VDIs is read from */
+const PROJECT_OTHER_CONFIG_KEY = 'xo:project'
+
 export class VmService {
   #restApi: RestApi
   #alarmService: AlarmService
@@ -54,9 +59,21 @@ export class VmService {
       CreateVmAfterCreateParams & {
         pool: XoPool['id']
         template: XoVmTemplate['uuid']
+        /** project owning the VM and its disks, see the tenant model in xo-server */
+        project?: XoProject['id']
       }
   ): Promise<XoVm['id']> {
-    const { pool, template, cloud_config, boot, destroy_cloud_config_vdi, network_config, createVtpm, ...rest } = params
+    const {
+      pool,
+      template,
+      cloud_config,
+      boot,
+      destroy_cloud_config_vdi,
+      network_config,
+      createVtpm,
+      project,
+      ...rest
+    } = params
     const xoApp = this.#restApi.xoApp
     const xapi = xoApp.getXapi(pool)
     const currentUser = this.#restApi.getCurrentUser()
@@ -77,6 +94,9 @@ export class VmService {
       })
       cloudConfigVdi = xoApp.getXapiObject<XoVdi>(cloudConfigVdiUuid as XoVdi['id'], 'VDI')
     }
+
+    // always written, so that a VM cloned from a template made from a project VM does not inherit its project
+    await this.#setProject(xapiVm, project)
 
     let timeLimit: number | undefined
     if (boot) {
@@ -101,6 +121,24 @@ export class VmService {
     return xoVm.id
   }
   create = defer(this.#create)
+
+  async #setProject(xapiVm: XenApiVmWrapped, project: XoProject['id'] | undefined) {
+    const xapi = xapiVm.$xapi
+    const setOtherConfig = async (type: 'VM' | 'VDI', ref: string) => {
+      await xapi.call(`${type}.remove_from_other_config`, ref, PROJECT_OTHER_CONFIG_KEY)
+      if (project !== undefined) {
+        await xapi.call(`${type}.add_to_other_config`, ref, PROJECT_OTHER_CONFIG_KEY, project)
+      }
+    }
+
+    await setOtherConfig('VM', xapiVm.$ref)
+    for (const vbdRef of await xapi.call<string[]>('VM.get_VBDs', xapiVm.$ref)) {
+      const vdiRef = await xapi.call<string>('VBD.get_VDI', vbdRef)
+      if (vdiRef !== 'OpaqueRef:NULL') {
+        await setOtherConfig('VDI', vdiRef)
+      }
+    }
+  }
 
   getVmsStatus(opts?: { filter?: string | ((obj: XoVm) => boolean) }) {
     const vms = this.#restApi.getObjectsByType<XoVm>('VM', opts)

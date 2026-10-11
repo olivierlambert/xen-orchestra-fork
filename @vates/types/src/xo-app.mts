@@ -9,7 +9,12 @@ import type {
   XoConfigBackupArchive,
   XoGroup,
   XoHost,
+  XoOrganization,
+  XoOrganizationRole,
   XoPool,
+  XoProject,
+  XoProjectRole,
+  XoProjectUsage,
   XoPoolBackupArchive,
   XoProxy,
   XoSchedule,
@@ -19,6 +24,7 @@ import type {
   XoVif,
   XoVm,
   XoVmBackupArchive,
+  XoVmTemplate,
 } from './xo.mjs'
 import { VatesTask } from './lib/vates-task.mjs'
 import type { PluginRestRouteDefinition } from './lib/rest-api.mjs'
@@ -254,6 +260,48 @@ export type XoApp = {
   }
 
   // methods ------------
+  assertOrganizationRole(user: XoUser, id: XoOrganization['id'], minRole: XoOrganizationRole): Promise<void>
+  assertProjectQuotaForVm(
+    id: XoProject['id'],
+    templateId: XoVmTemplate['id'],
+    params: { cpus?: number; memory?: number; vdis?: { size?: number; userdevice?: string; destroy?: boolean }[] }
+  ): Promise<Omit<XoProjectUsage, 'snapshots'>>
+  assertProjectRole(user: XoUser, id: XoProject['id'], minRole: XoProjectRole): Promise<void>
+  createOrganization(params: { name: string }): Promise<XoOrganization>
+  createOrganizationUser(
+    id: XoOrganization['id'],
+    params: { name: string; password: string; role?: XoOrganizationRole }
+  ): Promise<XoUser>
+  createProject(params: {
+    organizationId: XoOrganization['id']
+    name: string
+    description?: string
+    quota?: XoProject['quota']
+    scope?: Partial<XoProject['scope']>
+  }): Promise<XoProject>
+  deleteOrganization(id: XoOrganization['id']): Promise<void>
+  deleteProject(id: XoProject['id']): Promise<void>
+  getOrganization(id: XoOrganization['id']): Promise<XoOrganization>
+  getOrganizations(): Promise<XoOrganization[]>
+  getProject(id: XoProject['id']): Promise<XoProject>
+  getProjectMembers(id: XoProject['id']): Promise<{ userId: XoUser['id']; role: XoProjectRole }[]>
+  getProjects(): Promise<XoProject[]>
+  getProjectUsage(id: XoProject['id']): Promise<{ quota: XoProject['quota']; usage: XoProjectUsage }>
+  getUserProjectRole(userId: XoUser['id'], id: XoProject['id']): Promise<XoProjectRole | undefined>
+  getUserProjects(userId: XoUser['id']): Promise<{ project: XoProject; role: XoProjectRole }[]>
+  setOrganizationMember(id: XoOrganization['id'], userId: XoUser['id'], role: XoOrganizationRole | null): Promise<void>
+  setProjectMember(id: XoProject['id'], userId: XoUser['id'], role: XoProjectRole | null): Promise<void>
+  updateOrganization(id: XoOrganization['id'], props: { name?: string }): Promise<XoOrganization>
+  updateProject(
+    id: XoProject['id'],
+    props: {
+      name?: string
+      description?: string
+      quota?: XoProject['quota']
+      scope?: Partial<XoProject['scope']>
+    }
+  ): Promise<XoProject>
+  withProjectLock<T>(id: XoProject['id'], fn: () => Promise<T>): Promise<T>
   allocIpAddresses(vifId: XoVif['id'], addAddresses?: string[], removeAddresses?: string[]): Promise<void>
   addAclV2GroupRole(groupId: XoGroup['id'], roleId: XoAclRole['id']): Promise<XoGroupRole>
   addAclV2UserRole(userId: XoUser['id'], roleId: XoAclRole['id']): Promise<XoUserRole>
