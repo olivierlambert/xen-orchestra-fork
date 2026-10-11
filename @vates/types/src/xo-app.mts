@@ -324,12 +324,15 @@ export type XoApp = {
     opts?: { from?: number; to?: number }
   ): Promise<XoProjectUsageRecord[]>
   sampleProjectUsage(): Promise<void>
-  pickProjectAddresses(
+  reserveProjectAddresses(
     projectId: XoProject['id'],
     networkIds: string[]
-  ): Promise<{ networkId: string; address: string; pool: XoIpPool }[]>
+  ): Promise<{ allocations: { networkId: string; address: string; pool: XoIpPool }[]; release: () => void }>
   registerVifAddress(vifId: string, address: string, poolId: string): Promise<void>
-  withIpAllocationLock<T>(fn: () => Promise<T>): Promise<T>
+  snapshotProjectVm(projectId: XoProject['id'], vmId: XoVm['id'], opts?: { name?: string }): Promise<string>
+  assertProjectActive(id: XoProject['id']): Promise<void>
+  revokeUserTokens(userId: XoUser['id']): Promise<void>
+  checkUserPassword(userId: XoUser['id'], password: string, updateIfNecessary?: boolean): Promise<boolean>
   generateMacAddress(): string
   getProjectBackupPolicies(
     projectId: XoProject['id']

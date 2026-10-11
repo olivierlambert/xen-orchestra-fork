@@ -1,6 +1,9 @@
 import { deprecate } from 'util'
 
+import { forbiddenOperation } from 'xo-common/api-errors.js'
+
 import { getUserPublicProperties } from '../utils.mjs'
+import { isTenantUser } from '../xo-mixins/projects.mjs'
 
 // ===================================================================
 
@@ -10,6 +13,11 @@ export async function signIn(credentials) {
   const { user, expiration } = await this.authenticateUser(credentials, {
     ip: connection.get('user_ip', undefined),
   })
+
+  // tenant accounts only use the REST API: a JSON-RPC session would receive every XO object
+  if (isTenantUser(user)) {
+    throw forbiddenOperation('sign in', 'this account can only use the REST API')
+  }
 
   connection.set('user_id', user.id)
 

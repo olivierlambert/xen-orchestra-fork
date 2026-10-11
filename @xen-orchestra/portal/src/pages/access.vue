@@ -63,6 +63,9 @@
         <FormField label="Name" for="key-name">
           <UiInput id="key-name" v-model="keyName" accent="brand" />
         </FormField>
+        <FormField v-if="store.isLive" label="Your password" for="key-password">
+          <UiInput id="key-password" v-model="keyPassword" accent="brand" type="password" />
+        </FormField>
         <FormField v-if="!store.isLive" label="Role" for="key-role">
           <NativeSelect id="key-role" v-model="keyRole">
             <option v-for="(label, role) of ROLES" :key="role" :value="role">{{ label }}</option>
@@ -73,7 +76,7 @@
           accent="brand"
           size="medium"
           left-icon="fa:plus"
-          :disabled="String(keyName ?? '').trim() === ''"
+          :disabled="String(keyName ?? '').trim() === '' || (store.isLive && String(keyPassword ?? '') === '')"
           @click="createKey()"
         >
           Create API key
@@ -172,12 +175,18 @@ const ROLES: Record<ApiKey['role'], string> = {
 }
 
 const keyName = ref<string | number | undefined>('')
+const keyPassword = ref<string | number | undefined>('')
 const keyRole = ref<string | number | undefined>('project-member')
 const newSecret = ref<string>()
 
 async function createKey() {
-  newSecret.value = await store.createApiKey(String(keyName.value).trim(), keyRole.value as ApiKey['role'])
+  newSecret.value = await store.createApiKey(
+    String(keyName.value).trim(),
+    keyRole.value as ApiKey['role'],
+    String(keyPassword.value ?? '')
+  )
   keyName.value = ''
+  keyPassword.value = ''
 }
 
 const sshName = ref<string | number | undefined>('')

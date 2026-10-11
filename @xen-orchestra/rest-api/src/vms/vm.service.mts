@@ -58,6 +58,8 @@ export class VmService {
         template: XoVmTemplate['uuid']
         /** project owning the VM and its disks, see the tenant model in xo-server */
         project?: XoProject['id']
+        /** only keep the VIFs given in the parameters */
+        destroyTemplateVifs?: boolean
       }
   ): Promise<XoVm['id']> {
     const {
@@ -69,13 +71,16 @@ export class VmService {
       network_config,
       createVtpm,
       project,
+      destroyTemplateVifs = false,
       ...rest
     } = params
     const xoApp = this.#restApi.xoApp
     const xapi = xoApp.getXapi(pool)
     const currentUser = this.#restApi.getCurrentUser()
 
-    const xapiVm = await xapi.createVm(template, rest, undefined, currentUser.id)
+    const xapiVm = await xapi.createVm(template, rest, undefined, currentUser.id, {
+      destroyAllVifs: destroyTemplateVifs,
+    })
     $defer.onFailure(() => xapi.VM_destroy(xapiVm.$ref))
     const xoVm = this.#restApi.getObject<XoVm>(xapiVm.uuid as XoVm['id'], 'VM')
 

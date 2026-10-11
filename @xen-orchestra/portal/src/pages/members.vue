@@ -100,7 +100,7 @@
         <template #info>{{ store.organizationMembers.length }}</template>
         <template #description>
           Members of the organization can be added to its projects. Organization admins manage members and every
-          project.
+          project. Removing an account created here deletes it.
         </template>
       </UiCardTitle>
       <UiAlert v-if="resetResult" accent="success" close @close="resetResult = undefined">

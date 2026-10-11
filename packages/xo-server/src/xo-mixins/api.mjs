@@ -18,6 +18,7 @@ import { AsyncLocalStorage } from 'async_hooks'
 import { format, JsonRpcError, MethodNotFound } from 'json-rpc-peer'
 
 import * as methods from '../api/index.mjs'
+import { isTenantUser } from './projects.mjs'
 import Connection from '../connection.mjs'
 import { noop, safeDateFormat, serializeError } from '../utils.mjs'
 
@@ -328,6 +329,10 @@ export default class Api {
     const userId = connection.get('user_id', undefined)
     if (userId !== undefined) {
       user = await this._app.getUser(userId)
+      // tenant accounts cannot sign in on JSON-RPC, this covers connections opened before the account was one
+      if (isTenantUser(user)) {
+        throw errors.unauthorized()
+      }
     }
 
     return this.runWithApiContext(user, () => {

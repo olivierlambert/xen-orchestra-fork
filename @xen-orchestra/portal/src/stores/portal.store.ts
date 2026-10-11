@@ -816,9 +816,9 @@ export const usePortalStore = defineStore('portal', () => {
     await loadSession()
   }
 
-  function logout() {
+  async function logout() {
     eventSource?.close()
-    xoLogout()
+    await xoLogout()
     status.value = 'login'
     liveProject.value = undefined
     account.value = undefined
@@ -829,7 +829,14 @@ export const usePortalStore = defineStore('portal', () => {
       await wait(300)
       return true
     }
-    return (await guard(() => xo.post('/account/actions/change_password', { oldPassword, newPassword }))) !== undefined
+    return (
+      (await guard(async () => {
+        await xo.post('/account/actions/change_password', { oldPassword, newPassword })
+        // XO revokes every token of the account: sign in again with the new password
+        await xoLogin(currentUser.value.name, newPassword)
+        return true
+      })) !== undefined
+    )
   }
 
   // --- Instances
@@ -1006,7 +1013,8 @@ export const usePortalStore = defineStore('portal', () => {
 
     if (isLive.value) {
       await guard(async () => {
-        await xo.post(`/vms/${instanceId}/actions/snapshot?sync=true`, { name_label: name })
+        // through the project: snapshots count in its quota
+        await xo.post(`/projects/${currentProjectId.value}/vms/${instanceId}/actions/snapshot`, { name_label: name })
         log(`Snapshot ${name} of ${instance.name}`)
         await Promise.all([refreshProject(), refreshInstances()])
       })
@@ -1211,12 +1219,13 @@ export const usePortalStore = defineStore('portal', () => {
   // --- Access
 
   /** Returns the secret, shown once */
-  async function createApiKey(name: string, role: ApiKey['role']): Promise<string | undefined> {
+  async function createApiKey(name: string, role: ApiKey['role'], password = ''): Promise<string | undefined> {
     if (isLive.value) {
       return guard(async () => {
         const { token } = await xo.post<{ token: string }>('/account/tokens', {
           description: name,
-          expiresIn: '1 year',
+          expiresIn: '180 days',
+          password,
         })
         log(`Created API key ${name}`)
         await refreshAccountData()

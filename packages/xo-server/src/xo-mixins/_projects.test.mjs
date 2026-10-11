@@ -5,7 +5,10 @@ import { hasPrivilegeOn } from '@xen-orchestra/acl'
 import {
   computeProjectUsage,
   estimateVmResources,
+  formatProjectStamp,
   getExceededQuotas,
+  getVdiRecordProject,
+  getVmRecordProject,
   getProjectRolePrivileges,
   hasProjectRole,
   makeKeyedLock,
@@ -53,7 +56,7 @@ describe('project roles', function () {
 
     assert.equal(can(viewer, 'vm', 'start', ownVm), false)
     assert.equal(can(member, 'vm', 'start', ownVm), true)
-    assert.equal(can(member, 'vm', 'snapshot', ownVm), true)
+    assert.equal(can(member, 'vm', 'snapshot', ownVm), false)
     assert.equal(can(member, 'vm', 'delete', ownVm), false)
     assert.equal(can(admin, 'vm', 'delete', ownVm), true)
   })
@@ -100,7 +103,17 @@ describe('computeProjectUsage()', function () {
   })
 
   it('counts the addresses the VIFs are locked to', function () {
-    assert.equal(computeProjectUsage([], [], [{ allowedIpv4Addresses: ['192.0.2.10'] }, {}]).ips, 1)
+    const vms = [
+      { id: 'vm', type: 'VM', CPUs: { number: 1 }, memory: { size: 1 } },
+      { id: 'snapshot', type: 'VM-snapshot', CPUs: { number: 1 }, memory: { size: 1 } },
+    ]
+    const vifs = [
+      { $VM: 'vm', allowedIpv4Addresses: ['192.0.2.10'] },
+      { $VM: 'vm' },
+      // the VIF of a snapshot keeps a copy of the address
+      { $VM: 'snapshot', allowedIpv4Addresses: ['192.0.2.10'] },
+    ]
+    assert.equal(computeProjectUsage(vms, [], vifs).ips, 1)
   })
 })
 
@@ -150,6 +163,11 @@ describe('estimateVmResources()', function () {
     )
   })
 
+  it('counts every disk whose user device matches no template disk', function () {
+    const vdis = [1, 2, 3].map(() => ({ userdevice: 'autodetect', size: 100 * GiB }))
+    assert.equal(estimateVmResources(template, { vdis }).storage, 310 * GiB)
+  })
+
   it('does not count destroyed disks nor shrink existing ones', function () {
     assert.equal(estimateVmResources(template, { vdis: [{ userdevice: '0', destroy: true }] }).storage, 0)
     assert.equal(estimateVmResources(template, { vdis: [{ userdevice: '0', size: 1 }] }).storage, 10 * GiB)
@@ -173,5 +191,56 @@ describe('makeKeyedLock()', function () {
 
     assert.ok(events.indexOf('end 1') < events.indexOf('start 2'))
     assert.ok(events.indexOf('start 3') < events.indexOf('end 1'))
+  })
+})
+
+describe('ownership stamps', function () {
+  const vm = (uuid, stamp, props = {}) => ({
+    uuid,
+    is_a_template: false,
+    is_control_domain: false,
+    is_a_snapshot: false,
+    other_config: stamp === undefined ? {} : { 'xo:project': stamp },
+    ...props,
+  })
+  const original = vm('vm-1', formatProjectStamp('prj', 'vm-1'))
+
+  it('owns the VM the stamp was written for', function () {
+    assert.equal(getVmRecordProject(original), 'prj')
+  })
+
+  it('does not own a copy, which carries the stamp of another VM', function () {
+    assert.equal(getVmRecordProject(vm('copy', formatProjectStamp('prj', 'vm-1'))), undefined)
+  })
+
+  it('owns the snapshots of the VM, not those of a copy', function () {
+    const stamp = formatProjectStamp('prj', 'vm-1')
+    assert.equal(getVmRecordProject(vm('snap', stamp, { is_a_snapshot: true, $snapshot_of: original })), 'prj')
+    const copy = vm('copy', stamp)
+    assert.equal(getVmRecordProject(vm('snap-2', stamp, { is_a_snapshot: true, $snapshot_of: copy })), undefined)
+  })
+
+  it('never owns templates nor backup snapshots', function () {
+    const stamp = formatProjectStamp('prj', 'vm-1')
+    assert.equal(getVmRecordProject(vm('vm-1', stamp, { is_a_template: true })), undefined)
+    const backupSnapshot = vm('snap', stamp, { is_a_snapshot: true, $snapshot_of: original })
+    backupSnapshot.other_config['xo:backup:job'] = 'job'
+    assert.equal(getVmRecordProject(backupSnapshot), undefined)
+  })
+
+  it('ignores stamps without a VM (previous format)', function () {
+    assert.equal(getVmRecordProject(vm('vm-1', 'prj')), undefined)
+  })
+
+  it('owns a VDI through a disk VBD of an owned VM, not through a CD', function () {
+    const stamp = formatProjectStamp('prj', 'vm-1')
+    const vdi = vbds => ({ other_config: { 'xo:project': stamp }, $VBDs: vbds })
+    assert.equal(getVdiRecordProject(vdi([{ type: 'Disk', $VM: original }])), 'prj')
+    assert.equal(getVdiRecordProject(vdi([{ type: 'CD', $VM: original }])), undefined)
+    assert.equal(getVdiRecordProject(vdi([{ type: 'Disk', $VM: vm('copy', stamp) }])), undefined)
+    assert.equal(getVdiRecordProject(vdi([])), undefined)
+
+    const snapshotVdi = { ...vdi([]), is_a_snapshot: true, $snapshot_of: vdi([{ type: 'Disk', $VM: original }]) }
+    assert.equal(getVdiRecordProject(snapshotVdi), 'prj')
   })
 })

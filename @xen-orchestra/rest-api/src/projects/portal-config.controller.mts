@@ -48,6 +48,18 @@ export class PortalConfigController extends Controller {
     const config = (
       this.#restApi.xoApp as unknown as { config: { getOptional(path: string): unknown } }
     ).config.getOptional('portal') as Partial<PortalConfig> | undefined
-    return { ...DEFAULT_CONFIG, ...config, prices: { ...DEFAULT_CONFIG.prices, ...config?.prices } }
+    // public: only the known keys, other entries of the section must not leak
+    return {
+      name: config?.name ?? DEFAULT_CONFIG.name,
+      logoUrl: config?.logoUrl,
+      supportUrl: config?.supportUrl,
+      color: config?.color,
+      currency: config?.currency ?? DEFAULT_CONFIG.currency,
+      prices: {
+        storagePerGiBMonth: config?.prices?.storagePerGiBMonth ?? DEFAULT_CONFIG.prices.storagePerGiBMonth,
+        snapshotPerGiBMonth: config?.prices?.snapshotPerGiBMonth ?? DEFAULT_CONFIG.prices.snapshotPerGiBMonth,
+        ipPerHour: config?.prices?.ipPerHour ?? DEFAULT_CONFIG.prices.ipPerHour,
+      },
+    }
   }
 }

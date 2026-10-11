@@ -11,7 +11,7 @@ import { extractIpFromVmNetworks } from './_extractIpFromVmNetworks.mjs'
 import { extractProperty, forEach, isEmpty, mapFilter, parseXml } from './utils.mjs'
 import { getVmDomainType, isHostRunning, isVmRunning } from './xapi/index.mjs'
 import { useUpdateSystem } from './xapi/utils.mjs'
-import { PROJECT_OTHER_CONFIG_KEY } from './xo-mixins/_projects.mjs'
+import { getVdiRecordProject, getVmRecordProject } from './xo-mixins/_projects.mjs'
 
 const { debug, warn } = createLogger('xo:server:xapi-objects-to-xo')
 
@@ -602,7 +602,7 @@ const TRANSFORMS = {
       vm.type += '-controller'
     } else if (obj.is_a_snapshot || obj.$snapshot_of !== undefined) {
       vm.type += '-snapshot'
-      vm.$project = otherConfig[PROJECT_OTHER_CONFIG_KEY]
+      vm.$project = getVmRecordProject(obj)
 
       vm.snapshot_time = toTimestamp(obj.snapshot_time)
       vm.$snapshot_of = link(obj, 'snapshot_of')
@@ -643,7 +643,7 @@ const TRANSFORMS = {
         install_repository: otherConfig['install-repository'],
       }
     } else {
-      vm.$project = otherConfig[PROJECT_OTHER_CONFIG_KEY]
+      vm.$project = getVmRecordProject(obj)
     }
 
     const { cap, mask, weight } = obj.VCPUs_params ?? {}
@@ -793,7 +793,7 @@ const TRANSFORMS = {
       current_operations: obj.current_operations,
       other_config: obj.other_config,
 
-      $project: obj.other_config[PROJECT_OTHER_CONFIG_KEY],
+      $project: getVdiRecordProject(obj),
       $SR: link(obj, 'SR'),
       $VBDs: link(obj, 'VBDs'),
     }
@@ -834,7 +834,8 @@ const TRANSFORMS = {
       VDI: link(obj, 'VDI'),
       VM: link(obj, 'VM'),
 
-      $project: obj.other_config[PROJECT_OTHER_CONFIG_KEY],
+      // owned through the VM, CD drives excepted (shared ISOs)
+      $project: obj.type === 'CD' ? undefined : getVmRecordProject(obj.$VM),
     }
   },
 
@@ -868,7 +869,7 @@ const TRANSFORMS = {
       })(),
 
       $network: link(obj, 'network'),
-      $project: obj.other_config[PROJECT_OTHER_CONFIG_KEY],
+      $project: getVmRecordProject(obj.$VM),
       $VM: link(obj, 'VM'),
     }
   },

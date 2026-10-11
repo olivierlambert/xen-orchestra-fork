@@ -1,4 +1,4 @@
-import type { XoOrganization, XoOrganizationRole } from '@vates/types'
+import type { XoOrganization, XoOrganizationRole, XoUser } from '@vates/types'
 import { json } from 'express'
 import { inject } from 'inversify'
 import { provide } from 'inversify-binding-decorators'
@@ -17,10 +17,14 @@ import {
   SuccessResponse,
   Tags,
 } from 'tsoa'
-import { invalidParameters } from 'xo-common/api-errors.js'
+import { invalidCredentials, invalidParameters } from 'xo-common/api-errors.js'
 
 import { badRequestResp, createdResp, noContentResp, unauthorizedResp } from '../open-api/common/response.common.mjs'
+import { ApiError } from '../helpers/error.helper.mjs'
 import { RestApi } from '../rest-api/rest-api.mjs'
+
+const PASSWORD_THROTTLING_DELAY = 2e3
+const passwordFailures = new Map<string, number>()
 
 type AccountToken = {
   /** first characters of the token, the full token is only returned at creation */
@@ -82,6 +86,8 @@ export class AccountController extends Controller {
   }
 
   /**
+   * Revokes all the tokens of the user, the API keys included.
+   *
    * @example body { "oldPassword": "…", "newPassword": "…" }
    */
   @Extension('x-mcp-exposure', 'deny')
@@ -92,7 +98,26 @@ export class AccountController extends Controller {
     if (body.newPassword.length < 8) {
       throw invalidParameters('the new password must have at least 8 characters')
     }
-    await this.#restApi.xoApp.changeUserPassword(this.#user.id, body.oldPassword, body.newPassword)
+    const userId = this.#user.id
+    await this.#checkPassword(userId, body.oldPassword)
+    await this.#restApi.xoApp.changeUserPassword(userId, body.oldPassword, body.newPassword)
+    // whoever had the password or a token is evicted, the portal signs in again
+    await this.#restApi.xoApp.revokeUserTokens(userId)
+  }
+
+  /**
+   * Throttled like the sign-in: a stolen session must not allow guessing the password.
+   */
+  async #checkPassword(userId: string, password: string) {
+    const lastFailure = passwordFailures.get(userId)
+    if (lastFailure !== undefined && Date.now() - lastFailure < PASSWORD_THROTTLING_DELAY) {
+      throw new ApiError('too fast password tries', 429)
+    }
+    if (!(await this.#restApi.xoApp.checkUserPassword(userId as XoUser['id'], password, false))) {
+      passwordFailures.set(userId, Date.now())
+      throw invalidCredentials()
+    }
+    passwordFailures.delete(userId)
   }
 
   /**
@@ -146,17 +171,19 @@ export class AccountController extends Controller {
   }
 
   /**
-   * The token is returned once, it has the rights of the current user.
+   * The token is returned once, it has the rights of the current user. Requires the password of the user.
    *
-   * @example body { "description": "terraform", "expiresIn": "30 days" }
+   * @example body { "description": "terraform", "expiresIn": "30 days", "password": "…" }
    */
   @Extension('x-mcp-exposure', 'deny')
   @Post('tokens')
   @Middlewares(json())
   @SuccessResponse(createdResp.status, createdResp.description)
   async createToken(
-    @Body() body: { description: string; expiresIn?: string }
+    @Body() body: { description: string; expiresIn?: string; password: string }
   ): Promise<{ token: string; prefix: string; expiresAt: number }> {
+    // a leaked token must not be enough to mint long-lived ones
+    await this.#checkPassword(this.#user.id, body.password)
     const token = await this.#restApi.xoApp.createAuthenticationToken({
       userId: this.#user.id,
       description: body.description,

@@ -10,6 +10,8 @@ import patch from '../patch.mjs'
 import { Tokens } from '../models/token.mjs'
 import { forEach, generateToken } from '../utils.mjs'
 
+const MAX_TRACKED_FAILURES = 1e4
+
 // ===================================================================
 
 const log = createLogger('xo:authentification')
@@ -29,7 +31,7 @@ export default class {
 
     // Store last failures by user to throttle tries (slow bruteforce
     // attacks).
-    this._failures = { __proto__: null }
+    this._failures = new Map()
 
     // Password authentication provider.
     this.registerAuthenticationProvider(async ({ username, password }, { ip } = {}) => {
@@ -184,10 +186,12 @@ export default class {
 
       const failures = this._failures
 
+      // throttled per username and IP, so that nobody can lock a user out from elsewhere. Not per IP alone: users
+      // behind a reverse proxy share its address (password spraying is for the proxy to limit)
       const { username } = credentials
+      const keys = username ? [`${username}\0${userData?.ip}`] : []
       const now = Date.now()
-      let lastFailure
-      if (username && (lastFailure = failures[username]) && lastFailure + this._throttlingDelay > now) {
+      if (keys.some(key => failures.get(key) + this._throttlingDelay > now)) {
         throw new Error('too fast authentication tries')
       }
 
@@ -201,12 +205,22 @@ export default class {
           result.bypassOtp || // some authentication providers bypass OTP (e.g. token)
           (await verifyTotp(otp, { secret }))
         ) {
-          delete failures[username]
+          failures.delete(keys[0])
           return result
         }
       }
 
-      failures[username] = now
+      for (const key of keys) {
+        failures.delete(key)
+        failures.set(key, now)
+      }
+      // bounded: the oldest entries are the first in a Map
+      for (const key of failures.keys()) {
+        if (failures.size <= MAX_TRACKED_FAILURES) {
+          break
+        }
+        failures.delete(key)
+      }
       throw invalidCredentials()
     }
 

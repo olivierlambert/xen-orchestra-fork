@@ -64,7 +64,12 @@ export async function login(username: string, password: string) {
     'POST',
     '/users/me/authentication_tokens',
     {
-      body: { client: { id: 'cloud-portal' }, description: 'Cloud portal session', expiresIn: '1 day' },
+      // one token per sign-in: XO reuses the token of a client, a session would then outlive its logout
+      body: {
+        client: { id: `cloud-portal-${crypto.randomUUID()}` },
+        description: 'Cloud portal session',
+        expiresIn: '1 day',
+      },
       headers: { authorization: `Basic ${btoa(`${username}:${password}`)}` },
     }
   )
@@ -72,18 +77,30 @@ export async function login(username: string, password: string) {
   setCookie(CONSOLE_TOKEN_COOKIE, token.id, 86400)
 }
 
-export function logout() {
+/** Revokes the session token, not only the cookies */
+export async function logout() {
+  const token = getCookies()[TOKEN_COOKIE]
+  if (token !== undefined) {
+    await request('DELETE', `/account/tokens/${encodeURIComponent(decodeURIComponent(token).slice(0, 8))}`).catch(
+      () => {}
+    )
+  }
   setCookie(TOKEN_COOKIE, '', 0)
   setCookie(CONSOLE_TOKEN_COOKIE, '', 0)
 }
 
+function getCookies(): Record<string, string> {
+  return Object.fromEntries(document.cookie.split('; ').map(cookie => cookie.split('=')))
+}
+
 function setCookie(name: string, value: string, maxAge: number) {
-  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; SameSite=Strict; max-age=${maxAge}`
+  const secure = location.protocol === 'https:' ? '; Secure' : ''
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; SameSite=Strict; max-age=${maxAge}${secure}`
 }
 
 /** For sessions opened before the console cookie existed */
 export function ensureConsoleCookie() {
-  const cookies = Object.fromEntries(document.cookie.split('; ').map(cookie => cookie.split('=')))
+  const cookies = getCookies()
   if (cookies[TOKEN_COOKIE] !== undefined && cookies[CONSOLE_TOKEN_COOKIE] === undefined) {
     setCookie(CONSOLE_TOKEN_COOKIE, decodeURIComponent(cookies[TOKEN_COOKIE]), 86400)
   }

@@ -14,7 +14,7 @@ import type {
   XoVm,
   XoVmTemplate,
 } from '@vates/types'
-import { forbiddenOperation } from 'xo-common/api-errors.js'
+import { forbiddenOperation, invalidParameters } from 'xo-common/api-errors.js'
 
 import type { RestApi } from '../rest-api/rest-api.mjs'
 import { VmService } from '../vms/vm.service.mjs'
@@ -175,16 +175,34 @@ export class ProjectService {
       throw forbiddenOperation('create VM', 'the template is not available to the project')
     }
 
-    // without explicit VIFs, the VIFs of the template are kept
-    const networkIds =
-      body.vifs !== undefined
-        ? body.vifs.map(vif => vif.network as XoNetwork['id'])
-        : this.#restApi
-            .getObject<XoVmTemplate>(templateId, 'VM-template')
-            .VIFs.map(vifId => this.#restApi.getObject<XoVif>(vifId, 'VIF').$network)
+    // the VIFs are always given: the ones of the template are removed, they would be on unchecked networks and
+    // unlocked
+    if (body.vifs === undefined || body.vifs.length === 0) {
+      throw forbiddenOperation('create VM', 'the networks of the instance must be given')
+    }
+    const networkIds = body.vifs.map(vif => vif.network as XoNetwork['id'])
     for (const networkId of networkIds) {
       if (!scope.networks.includes(networkId)) {
         throw forbiddenOperation('create VM', `the network ${networkId} is not available to the project`)
+      }
+    }
+
+    // user devices are positions: unique, digits only (`autodetect` would create a disk per entry), and never a
+    // CD drive of the template (shared ISOs)
+    const templateVbds = this.#restApi
+      .getObject<XoVmTemplate>(templateId, 'VM-template')
+      .$VBDs.map(vbdId => this.#restApi.getObject<XoVbd>(vbdId, 'VBD'))
+    const userdevices = new Set<string>()
+    for (const vdi of body.vdis ?? []) {
+      if ('userdevice' in vdi) {
+        const userdevice = vdi.userdevice
+        if (!/^\d+$/.test(userdevice) || userdevices.has(userdevice)) {
+          throw invalidParameters('vdis: user devices must be distinct numbers')
+        }
+        if (templateVbds.some(vbd => vbd.is_cd_drive && vbd.position === userdevice)) {
+          throw forbiddenOperation('create VM', 'a CD drive of the template cannot be changed')
+        }
+        userdevices.add(userdevice)
       }
     }
 
@@ -215,31 +233,26 @@ export class ProjectService {
       }
     }
 
-    if (scope.ipPools.length !== 0 && body.vifs === undefined) {
-      throw forbiddenOperation('create VM', 'the networks must be given, public IPs are allocated per VIF')
-    }
+    return xoApp.withProjectLock(id, async () => {
+      await xoApp.assertProjectActive(id)
 
-    // IP pools are shared between projects: the allocation lock is taken inside the project lock
-    return xoApp.withProjectLock(id, () =>
-      xoApp.withIpAllocationLock(async () => {
-        const allocations = body.vifs !== undefined ? await xoApp.pickProjectAddresses(id, networkIds) : []
-        const vifs = body.vifs?.map(vif => {
-          const index = allocations.findIndex(allocation => allocation.networkId === vif.network)
+      // reserved, not locked: IP pools are shared, other projects keep creating instances meanwhile
+      const { allocations, release } = await xoApp.reserveProjectAddresses(id, networkIds)
+      try {
+        // MAC addresses are always generated: a tenant could otherwise reuse the MAC of another tenant
+        const vifs = body.vifs!.map(({ network }) => {
+          const index = allocations.findIndex(allocation => allocation.networkId === network)
           const allocation = index === -1 ? undefined : allocations.splice(index, 1)[0]
-          return {
-            ...vif,
-            mac: vif.mac ?? xoApp.generateMacAddress(),
-            allocation,
-          }
+          return { network, mac: xoApp.generateMacAddress(), allocation }
         })
-        const allocated = (vifs ?? []).filter(vif => vif.allocation !== undefined)
+        const allocated = vifs.filter(vif => vif.allocation !== undefined)
 
         await xoApp.assertProjectQuotaForVm(id, templateId, { ...vmParams, ips: allocated.length })
 
-        const networkConfig = getNetworkConfig(vifs ?? [])
+        const networkConfig = getNetworkConfig(vifs)
         const vmId = await this.#vmService.create({
           ...vmParams,
-          vifs: vifs?.map(({ allocation, ...vif }) => ({
+          vifs: vifs.map(({ allocation, ...vif }) => ({
             ...vif,
             ...(allocation !== undefined && { ipv4_allowed: [allocation.address] }),
           })),
@@ -251,6 +264,7 @@ export class ProjectService {
           template: body.template as XoVmTemplate['uuid'],
           vdis: body.vdis as Parameters<VmService['create']>[0]['vdis'],
           project: id,
+          destroyTemplateVifs: true,
         })
 
         const vm = this.#restApi.getObject<XoVm>(vmId, 'VM')
@@ -263,8 +277,10 @@ export class ProjectService {
           }
         }
         return vmId
-      })
-    )
+      } finally {
+        release()
+      }
+    })
   }
 }
 

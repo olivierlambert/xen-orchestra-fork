@@ -104,8 +104,16 @@ export type ProjectCreateVmBody = {
   template: string
   name_label: string
   name_description?: string
+  /**
+   * @isInt
+   * @minimum 1
+   */
   cpus?: number
-  /** in bytes */
+  /**
+   * in bytes
+   * @isInt
+   * @minimum 1
+   */
   memory?: number
   vdis?: (
     | {
@@ -117,6 +125,11 @@ export type ProjectCreateVmBody = {
     | {
         userdevice: string
         name_label?: string
+        /**
+         * in bytes
+         * @isInt
+         * @minimum 1
+         */
         size?: number
         sr?: string
         name_description?: string
@@ -126,9 +139,8 @@ export type ProjectCreateVmBody = {
         userdevice: string
       }
   )[]
-  vifs?: {
+  /** the VIFs of the template are not kept, MAC addresses are generated */
+  vifs: {
     network: string
-    device?: string
-    mac?: string
   }[]
 } & CreateVmAfterCreateParams

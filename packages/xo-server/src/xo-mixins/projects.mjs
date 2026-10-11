@@ -1,6 +1,7 @@
 // @ts-check
 
-import { randomBytes } from 'node:crypto'
+import { createLogger } from '@xen-orchestra/log'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { forbiddenOperation, invalidParameters, noSuchObject } from 'xo-common/api-errors.js'
 
 import { Offerings, Organizations, Projects } from '../models/projects.mjs'
@@ -65,6 +66,18 @@ import {
  */
 const adminGroupName = ({ id, name }) => `${name}: organization admins (${id.slice(0, 8)})`
 
+const log = createLogger('xo:projects')
+
+const DEFAULT_MAX_USERS_PER_ORGANIZATION = 200
+
+/**
+ * Accounts created by organizations are tenants: they only use XO through the tenant model (REST API and the
+ * portal), never the JSON-RPC API nor the administration UIs. They carry the id of their organization.
+ *
+ * @param {{ tenantOf?: string } | undefined} user
+ */
+export const isTenantUser = user => user?.tenantOf !== undefined
+
 const EMPTY_SCOPE = { pools: [], templates: [], networks: [], srs: [], offerings: [], ipPools: [], backupJobs: [] }
 
 /**
@@ -117,6 +130,8 @@ export default class Projects_ {
   #offerings
 
   #withProjectLock = makeKeyedLock()
+  // organization records are read, changed by slow operations, then written: changes are serialized
+  #withOrganizationLock = makeKeyedLock()
 
   /**
    * @param {any} app
@@ -210,13 +225,15 @@ export default class Projects_ {
    * @param {string} id
    * @param {{ name?: string }} props
    */
-  async updateOrganization(id, { name }) {
-    const organization = await this.getOrganization(id)
-    if (name !== undefined) {
-      organization.name = name
-      await this._app.updateGroup(organization.adminGroupId, { name: adminGroupName(organization) })
-    }
-    return this.#organizations.update(organization)
+  updateOrganization(id, { name }) {
+    return this.#withOrganizationLock(id, async () => {
+      const organization = await this.getOrganization(id)
+      if (name !== undefined) {
+        organization.name = name
+        await this._app.updateGroup(organization.adminGroupId, { name: adminGroupName(organization) })
+      }
+      return this.#organizations.update(organization)
+    })
   }
 
   /**
@@ -246,24 +263,34 @@ export default class Projects_ {
       throw invalidParameters(`role must be one of ${ORGANIZATION_ROLES.join(', ')}`)
     }
 
-    const organization = await this.getOrganization(id)
-    const wasAdmin = organization.members[userId] === 'admin'
-    if (role === null) {
-      const projects = await this.#projects.get({ organizationId: id })
-      await Promise.all(projects.map(project => this.setProjectMember(project.id, userId, null)))
-      delete organization.members[userId]
-    } else {
-      await this._app.getUser(userId)
-      organization.members[userId] = role
-    }
+    await this.#withOrganizationLock(id, async () => {
+      const organization = await this.getOrganization(id)
+      const wasAdmin = organization.members[userId] === 'admin'
+      if (role === null) {
+        const projects = await this.#projects.get({ organizationId: id })
+        await Promise.all(projects.map(project => this.setProjectMember(project.id, userId, null)))
+        delete organization.members[userId]
+      } else {
+        await this._app.getUser(userId)
+        organization.members[userId] = role
+      }
 
-    // the admin group carries the admin role of every project of the organization
-    if (role === 'admin' && !wasAdmin) {
-      await this._app.addUserToGroup(userId, organization.adminGroupId)
-    } else if (role !== 'admin' && wasAdmin) {
-      await this._app.removeUserFromGroup(userId, organization.adminGroupId)
+      // the admin group carries the admin role of every project of the organization
+      if (role === 'admin' && !wasAdmin) {
+        await this._app.addUserToGroup(userId, organization.adminGroupId)
+      } else if (role !== 'admin' && wasAdmin) {
+        await this._app.removeUserFromGroup(userId, organization.adminGroupId)
+      }
+      await this.#organizations.update(organization)
+    })
+
+    // an account created by this organization only exists for it: removing it disables it for good
+    if (role === null) {
+      const user = await this._app.getUser(userId).catch(() => undefined)
+      if (user?.tenantOf === id) {
+        await this._app.deleteUser(userId)
+      }
     }
-    await this.#organizations.update(organization)
   }
 
   /**
@@ -272,10 +299,13 @@ export default class Projects_ {
    * @param {string} userId
    */
   async removeUserFromOrganizations(userId) {
-    for (const organization of await this.getOrganizations()) {
-      if (organization.members[userId] !== undefined) {
-        delete organization.members[userId]
-        await this.#organizations.update(organization)
+    for (const { id, members } of await this.getOrganizations()) {
+      if (members[userId] !== undefined) {
+        await this.#withOrganizationLock(id, async () => {
+          const organization = await this.getOrganization(id)
+          delete organization.members[userId]
+          await this.#organizations.update(organization)
+        })
       }
     }
   }
@@ -287,9 +317,40 @@ export default class Projects_ {
    * @param {{ name: string, password: string, role?: OrganizationRole }} params
    */
   async createOrganizationUser(id, { name, password, role = 'member' }) {
-    await this.getOrganization(id)
-    const user = await this._app.createUser({ name, password, permission: 'none' })
-    await this.setOrganizationMember(id, user.id, role)
+    if (!ORGANIZATION_ROLES.includes(role)) {
+      throw invalidParameters(`role must be one of ${ORGANIZATION_ROLES.join(', ')}`)
+    }
+    if (typeof name !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(name)) {
+      throw invalidParameters('the name must be an email address')
+    }
+    if (typeof password !== 'string' || password.length < 8) {
+      throw invalidParameters('the password must have at least 8 characters')
+    }
+
+    const app = this._app
+    const organization = await this.getOrganization(id)
+    const max = app.config.getOptional('projects.maxUsersPerOrganization') ?? DEFAULT_MAX_USERS_PER_ORGANIZATION
+    const tenants = (await app.getAllUsers()).filter((/** @type {any} */ user) => user.tenantOf === id)
+    if (tenants.length >= max) {
+      throw forbiddenOperation('create account', `the organization has reached ${max} accounts`)
+    }
+    if (organization.suspended !== undefined) {
+      throw forbiddenOperation('create account', 'the organization is suspended')
+    }
+
+    let user
+    try {
+      user = await app.createUser({ name, password, permission: 'none', tenantOf: id })
+    } catch {
+      // same answer whatever the reason, not to tell which names exist
+      throw forbiddenOperation('create account', 'this name cannot be used')
+    }
+    try {
+      await this.setOrganizationMember(id, user.id, role)
+    } catch (error) {
+      await app.deleteUser(user.id).catch(() => {})
+      throw error
+    }
     return user
   }
 
@@ -366,10 +427,8 @@ export default class Projects_ {
         try {
           current = await app.getAclV2RolePrivileges(roleId)
         } catch (error) {
-          if (noSuchObject.is(error)) {
-            continue
-          }
-          throw error
+          log.warn('cannot sync the role of a project', { projectId: project.id, role, error })
+          continue
         }
         const same = (/** @type {any} */ a, /** @type {any} */ b) =>
           a.resource === b.resource && a.action === b.action && a.effect === b.effect && a.selector === b.selector
@@ -391,38 +450,48 @@ export default class Projects_ {
    * @param {{ organizationId: string, name: string, description?: string, quota?: Quota, scope?: Partial<Scope> }} params
    * @returns {Promise<Project>}
    */
-  async createProject({ organizationId, name, description = '', quota, scope }) {
-    const organization = await this.getOrganization(organizationId)
+  createProject({ organizationId, name, description = '', quota, scope }) {
+    const app = this._app
+    return this.#withOrganizationLock(organizationId, async () => {
+      const organization = await this.getOrganization(organizationId)
 
-    /** @type {Project} */
-    const project = await this.#projects.add({
-      organizationId,
-      name,
-      description,
-      quota: normalizeQuota(quota),
-      scope: normalizeScope(scope),
-      roleIds: {},
-    })
-
-    // the role names are informative only, the project keeps the role ids
-    for (const role of PROJECT_ROLES) {
-      const { id: roleId } = await this._app.createAclV2Role({
-        name: `${organization.name} / ${name}: ${PROJECT_ROLE_LABELS[role]}`,
-        description: `Generated for the project ${project.id}, do not edit`,
-      })
-      project.roleIds[role] = roleId
-      for (const privilege of getProjectRolePrivileges(project.id, role)) {
-        await this._app.createAclV2Privilege({ ...privilege, roleId })
+      // the roles need the id of the project: it is chosen first, the project is saved last, with its roles
+      /** @type {Project} */
+      const project = {
+        id: randomUUID(),
+        organizationId,
+        name,
+        description,
+        quota: normalizeQuota(quota),
+        scope: normalizeScope(scope),
+        roleIds: /** @type {Project['roleIds']} */ ({}),
       }
-    }
-    if (organization.suspended === undefined) {
-      await this._app.addAclV2GroupRole(organization.adminGroupId, project.roleIds.admin)
-    } else {
-      organization.suspended.projectMembers[project.id] = {}
-      await this.#organizations.update(organization)
-    }
-
-    return this.#projects.update(project)
+      try {
+        // the role names are informative only, the project keeps the role ids
+        for (const role of PROJECT_ROLES) {
+          const { id: roleId } = await app.createAclV2Role({
+            name: `${organization.name} / ${name}: ${PROJECT_ROLE_LABELS[role]}`,
+            description: `Generated for the project ${project.id}, do not edit`,
+          })
+          project.roleIds[role] = roleId
+          for (const privilege of getProjectRolePrivileges(project.id, role)) {
+            await app.createAclV2Privilege({ ...privilege, roleId })
+          }
+        }
+        if (organization.suspended === undefined) {
+          await app.addAclV2GroupRole(organization.adminGroupId, project.roleIds.admin)
+        } else {
+          organization.suspended.projectMembers[project.id] = {}
+          await this.#organizations.update(organization)
+        }
+        return await this.#projects.add(project)
+      } catch (error) {
+        for (const roleId of Object.values(project.roleIds)) {
+          await app.deleteAclV2Role(roleId).catch(() => {})
+        }
+        throw error
+      }
+    })
   }
 
   /**
@@ -471,7 +540,15 @@ export default class Projects_ {
   /**
    * @param {string} id
    */
-  async deleteProject(id) {
+  deleteProject(id) {
+    // not while an instance of the project is being created or restored
+    return this.#withProjectLock(id, () => this.#deleteProject(id))
+  }
+
+  /**
+   * @param {string} id
+   */
+  async #deleteProject(id) {
     const project = await this.getProject(id)
     const { vms, vdis } = this.#getProjectObjects(id)
     if (vms.length !== 0 || vdis.length !== 0) {
@@ -588,14 +665,50 @@ export default class Projects_ {
    * @returns {Promise<{ project: Project, role: ProjectRole }[]>}
    */
   async getUserProjects(userId) {
+    const app = this._app
+    const projects = await this.getProjects()
+    const user = await app.getUser(userId)
+    if (user.permission === 'admin') {
+      return projects.map(project => ({ project, role: /** @type {const} */ ('admin') }))
+    }
+
+    const organizations = new Map((await this.getOrganizations()).map(_ => [_.id, _]))
+    const userRoleIds = new Set(
+      (await app.getAclV2UserRoles(userId, { bypassAuthorization: true, fromGroup: false })).map(
+        (/** @type {{ id: string }} */ role) => role.id
+      )
+    )
     const result = []
-    for (const project of await this.getProjects()) {
-      const role = await this.getUserProjectRole(userId, project.id)
+    for (const project of projects) {
+      const organization = organizations.get(project.organizationId)
+      if (organization === undefined || organization.suspended !== undefined) {
+        continue
+      }
+      /** @type {ProjectRole | undefined} */
+      let role = organization.members[userId] === 'admin' ? 'admin' : undefined
+      for (let i = PROJECT_ROLES.length - 1; role === undefined && i >= 0; i--) {
+        if (userRoleIds.has(project.roleIds[PROJECT_ROLES[i]])) {
+          role = PROJECT_ROLES[i]
+        }
+      }
       if (role !== undefined) {
         result.push({ project, role })
       }
     }
     return result
+  }
+
+  /**
+   * Throws if the organization of the project is suspended. Checked again inside the project lock by the
+   * operations which create resources, which may have started before the suspension.
+   *
+   * @param {string} id
+   */
+  async assertProjectActive(id) {
+    const project = await this.getProject(id)
+    if ((await this.getOrganization(project.organizationId)).suspended !== undefined) {
+      throw forbiddenOperation('project', 'the organization is suspended')
+    }
   }
 
   // === Authorization
@@ -659,38 +772,63 @@ export default class Projects_ {
    */
   async suspendOrganization(id, { reason = '' } = {}) {
     const app = this._app
-    const organization = await this.getOrganization(id)
-    if (organization.suspended !== undefined) {
+    const projects = await this.#withOrganizationLock(id, async () => {
+      const organization = await this.getOrganization(id)
+      if (organization.suspended !== undefined) {
+        return
+      }
+
+      // recorded before any change: resuming gives back exactly this, even after a partial failure
+      /** @type {Record<string, Record<string, ProjectRole>>} */
+      const projectMembers = {}
+      const projects = await this.#projects.get({ organizationId: id })
+      for (const project of projects) {
+        projectMembers[project.id] = {}
+        for (const { userId, role } of await this.getProjectMembers(project.id)) {
+          projectMembers[project.id][userId] = role
+        }
+      }
+      organization.suspended = { at: Date.now(), reason, projectMembers }
+      await this.#organizations.update(organization)
+
+      for (const project of projects) {
+        for (const [userId, role] of Object.entries(projectMembers[project.id])) {
+          await app
+            .deleteAclV2UserRole(userId, project.roleIds[role])
+            .catch((/** @type {unknown} */ error) =>
+              log.warn('suspend organization: cannot detach a role', { id, userId, error })
+            )
+        }
+        await app.deleteAclV2GroupRole(organization.adminGroupId, project.roleIds.admin).catch(() => {})
+      }
+      return projects
+    })
+    if (projects === undefined) {
       return
     }
 
-    /** @type {Record<string, Record<string, ProjectRole>>} */
-    const projectMembers = {}
-    const projects = await this.#projects.get({ organizationId: id })
-    for (const project of projects) {
-      projectMembers[project.id] = {}
-      for (const { userId, role } of await this.getProjectMembers(project.id)) {
-        projectMembers[project.id][userId] = role
-        await app.deleteAclV2UserRole(userId, project.roleIds[role])
-      }
-      await app.deleteAclV2GroupRole(organization.adminGroupId, project.roleIds.admin).catch(() => {})
-    }
-    organization.suspended = { at: Date.now(), reason, projectMembers }
-    await this.#organizations.update(organization)
-
-    // best effort: a VM which cannot be stopped is left running, the members have no access to it anyway
+    // after the creations and restores in progress, which check the suspension inside the project lock
     await Promise.all(
-      projects.flatMap(project =>
-        this.#getProjectObjects(project.id)
-          .vms.filter(vm => vm.type === 'VM' && vm.power_state !== 'Halted')
-          .map(async vm => {
-            const xapi = app.getXapi(vm)
-            try {
-              await xapi.callAsync('VM.clean_shutdown', vm._xapiRef)
-            } catch {
-              await xapi.callAsync('VM.hard_shutdown', vm._xapiRef).catch(() => {})
-            }
-          })
+      projects.map((/** @type {Project} */ project) =>
+        this.#withProjectLock(project.id, () =>
+          Promise.all(
+            this.#getProjectObjects(project.id)
+              .vms.filter(vm => vm.type === 'VM' && vm.power_state !== 'Halted')
+              .map(async vm => {
+                // best effort: a VM which cannot be stopped is left running, nobody has access to it anyway
+                const xapi = app.getXapi(vm)
+                try {
+                  await xapi.callAsync('VM.clean_shutdown', vm._xapiRef)
+                } catch {
+                  await xapi
+                    .callAsync('VM.hard_shutdown', vm._xapiRef)
+                    .catch((/** @type {unknown} */ error) =>
+                      log.warn('suspend organization: cannot stop a VM', { id, vmId: vm.id, error })
+                    )
+                }
+              })
+          )
+        )
       )
     )
   }
@@ -700,31 +838,44 @@ export default class Projects_ {
    *
    * @param {string} id
    */
-  async resumeOrganization(id) {
+  resumeOrganization(id) {
     const app = this._app
-    const organization = await this.getOrganization(id)
-    const { suspended } = organization
-    if (suspended === undefined) {
-      return
-    }
+    return this.#withOrganizationLock(id, async () => {
+      const organization = await this.getOrganization(id)
+      const { suspended } = organization
+      if (suspended === undefined) {
+        return
+      }
 
-    for (const project of await this.#projects.get({ organizationId: id })) {
-      await app.addAclV2GroupRole(organization.adminGroupId, project.roleIds.admin).catch(() => {})
-      for (const [userId, role] of Object.entries(suspended.projectMembers[project.id] ?? {})) {
-        // members removed while suspended stay removed
-        if (organization.members[userId] !== undefined) {
-          await app.addAclV2UserRole(userId, project.roleIds[role]).catch(() => {})
+      for (const project of await this.#projects.get({ organizationId: id })) {
+        await app
+          .addAclV2GroupRole(organization.adminGroupId, project.roleIds.admin)
+          .catch((/** @type {any} */ error) => {
+            if (error?.code !== 'OBJECT_ALREADY_EXISTS' && !String(error?.message).includes('already exists')) {
+              log.warn('resume organization: cannot attach the admin role', { id, projectId: project.id, error })
+            }
+          })
+        for (const [userId, role] of Object.entries(suspended.projectMembers[project.id] ?? {})) {
+          // members removed while suspended stay removed
+          if (organization.members[userId] !== undefined) {
+            await app
+              .addAclV2UserRole(userId, project.roleIds[role])
+              .catch((/** @type {unknown} */ error) =>
+                log.warn('resume organization: cannot attach a role', { id, userId, error })
+              )
+          }
         }
       }
-    }
-    delete organization.suspended
-    await this.#organizations.update(organization)
+      delete organization.suspended
+      await this.#organizations.update(organization)
+    })
   }
 
   /**
    * Sets a new random password for a member, for organization admins: there are no invitation emails.
    *
-   * Only for accounts which belong to this organization only, never for XO administrators.
+   * Only for the accounts created by this organization, which have no other rights; their tokens are revoked, so
+   * a reset also evicts whoever had their password.
    *
    * @param {string} id
    * @param {string} userId
@@ -734,15 +885,25 @@ export default class Projects_ {
     const app = this._app
     const organization = await this.getOrganization(id)
     const user = await app.getUser(userId)
-    const otherOrganizations = (await this.getOrganizations()).filter(
-      _ => _.id !== id && _.members[userId] !== undefined
-    )
-    if (organization.members[userId] === undefined || user.permission === 'admin' || otherOrganizations.length !== 0) {
-      throw forbiddenOperation('reset password', 'only for accounts which belong to this organization only')
+    if (
+      organization.members[userId] === undefined ||
+      user.tenantOf !== id ||
+      user.permission !== 'none' ||
+      Object.keys(user.authProviders ?? {}).length !== 0
+    ) {
+      throw forbiddenOperation('reset password', 'only for the accounts created by this organization')
     }
     const password = randomBytes(12).toString('base64url')
     await app.updateUser(userId, { password })
+    await this.revokeUserTokens(userId)
     return password
+  }
+
+  /**
+   * @param {string} userId
+   */
+  async revokeUserTokens(userId) {
+    await this._app.deleteAuthenticationTokens({ filter: { user_id: userId } })
   }
 
   // === Usage and quota

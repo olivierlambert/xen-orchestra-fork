@@ -3,8 +3,79 @@
 // Pure helpers of the tenant model (organizations and projects), kept free of any XO dependency so they
 // can be unit tested.
 
-/** Key of the VM/VDI `other_config` entry holding the owning project, set by XO at creation only */
+/** Key of the `other_config` entry holding the owning project, set by XO at creation only */
 export const PROJECT_OTHER_CONFIG_KEY = 'xo:project'
+
+// set by backup jobs on their snapshots and VDIs: never owned by a project, tenants must not delete them
+const BACKUP_JOB_KEY = 'xo:backup:job'
+
+/**
+ * The stamp binds the project to the VM it was written for. XAPI copies `other_config` (clones, copies,
+ * replicas, imports, templates): such a copy carries the stamp of another VM and is therefore not owned.
+ *
+ * @param {string} projectId
+ * @param {string} vmUuid
+ */
+export const formatProjectStamp = (projectId, vmUuid) => `${projectId}/${vmUuid}`
+
+/**
+ * @param {string | undefined} stamp
+ * @returns {{ projectId: string, vmUuid: string } | undefined}
+ */
+export function parseProjectStamp(stamp) {
+  const index = stamp?.lastIndexOf('/') ?? -1
+  if (index <= 0) {
+    return
+  }
+  return {
+    projectId: /** @type {string} */ (stamp).slice(0, index),
+    vmUuid: /** @type {string} */ (stamp).slice(index + 1),
+  }
+}
+
+/**
+ * Project owning a XAPI VM record: a VM whose stamp names it, or a snapshot of such a VM. Templates, control
+ * domains and backup snapshots are never owned.
+ *
+ * @param {any} vm XAPI VM record
+ * @returns {string | undefined}
+ */
+export function getVmRecordProject(vm) {
+  if (vm == null || vm.is_a_template || vm.is_control_domain || vm.other_config[BACKUP_JOB_KEY] !== undefined) {
+    return
+  }
+  const stamp = parseProjectStamp(vm.other_config[PROJECT_OTHER_CONFIG_KEY])
+  if (stamp === undefined) {
+    return
+  }
+  const identity = vm.is_a_snapshot ? vm.$snapshot_of?.uuid : vm.uuid
+  return identity === stamp.vmUuid ? stamp.projectId : undefined
+}
+
+/**
+ * Project owning a XAPI VDI record: its stamp names a project owning one of the (non CD) VMs it is attached to.
+ *
+ * @param {any} vdi XAPI VDI record
+ * @returns {string | undefined}
+ */
+export function getVdiRecordProject(vdi) {
+  if (vdi.other_config[BACKUP_JOB_KEY] !== undefined) {
+    return
+  }
+  const stamp = parseProjectStamp(vdi.other_config[PROJECT_OTHER_CONFIG_KEY])
+  if (stamp === undefined) {
+    return
+  }
+  for (const vbd of vdi.$VBDs ?? []) {
+    if (vbd != null && vbd.type !== 'CD' && getVmRecordProject(vbd.$VM) === stamp.projectId) {
+      return stamp.projectId
+    }
+  }
+  // a snapshot VDI is created before the VBDs of its snapshot VM: owned through the VDI it is a snapshot of
+  if (vdi.is_a_snapshot && vdi.$snapshot_of != null && getVdiRecordProject(vdi.$snapshot_of) === stamp.projectId) {
+    return stamp.projectId
+  }
+}
 
 /** Ordered from the least to the most privileged */
 export const PROJECT_ROLES = /** @type {const} */ (['viewer', 'member', 'admin'])
@@ -58,7 +129,6 @@ const MEMBER_PRIVILEGES = [
   { resource: 'vm', action: 'unpause' },
   { resource: 'vm', action: 'suspend' },
   { resource: 'vm', action: 'resume' },
-  { resource: 'vm', action: 'snapshot' },
   { resource: 'vm', action: 'revert-snapshot' },
   { resource: 'vm', action: 'update:nameLabel' },
   { resource: 'vm', action: 'update:nameDescription' },
@@ -76,6 +146,7 @@ const ADMIN_PRIVILEGES = [
 // - `clone`, `update:cpus`, `update:memory`, VDI `create`/`update:size`: would bypass the quota
 // - `migrate-send`, `export`, `update:resourceSet`, `update:share`: infrastructure-level operations
 // - `update:tags`: tags select the VMs of backup policies, they are changed through the project
+// - `snapshot`: snapshots count in the quota, they are taken through the project
 const PRIVILEGES_BY_ROLE = {
   viewer: VIEWER_PRIVILEGES,
   member: MEMBER_PRIVILEGES,
@@ -101,7 +172,8 @@ export function getProjectRolePrivileges(projectId, role) {
  *
  * @param {{ type: string, CPUs: { number: number }, memory: { size: number, dynamic?: number[] } }[]} vms objects of type VM or VM-snapshot
  * @param {{ type: string, size: number }[]} vdis objects of type VDI or VDI-snapshot
- * @param {{ allowedIpv4Addresses?: string[] }[]} [vifs] public IPs are the addresses VIFs are locked to
+ * @param {{ $VM: string, allowedIpv4Addresses?: string[] }[]} [vifs] public IPs are the addresses the VIFs of the
+ *   instances are locked to (snapshots VIFs keep a copy of them)
  */
 export function computeProjectUsage(vms, vdis, vifs = []) {
   const usage = { instances: 0, vcpus: 0, memory: 0, storage: 0, snapshots: 0, ips: 0 }
@@ -119,8 +191,11 @@ export function computeProjectUsage(vms, vdis, vifs = []) {
       usage.storage += vdi.size
     }
   }
+  const instanceIds = new Set(vms.filter(vm => vm.type === 'VM').map(vm => /** @type {any} */ (vm).id))
   for (const vif of vifs) {
-    usage.ips += vif.allowedIpv4Addresses?.length ?? 0
+    if (instanceIds.has(vif.$VM)) {
+      usage.ips += vif.allowedIpv4Addresses?.length ?? 0
+    }
   }
   return usage
 }
@@ -154,8 +229,11 @@ export function estimateVmResources(template, params) {
   const disks = { ...template.templateDisks }
   let newDisks = 0
   for (const vdi of params.vdis ?? []) {
-    if (vdi.userdevice === undefined) {
-      newDisks += vdi.size ?? 0
+    // a user device matching no disk of the template creates a disk
+    if (vdi.userdevice === undefined || !(vdi.userdevice in template.templateDisks)) {
+      if (!vdi.destroy) {
+        newDisks += vdi.size ?? 0
+      }
     } else if (vdi.destroy) {
       delete disks[vdi.userdevice]
     } else if (vdi.size !== undefined) {

@@ -322,6 +322,10 @@ export default class {
       conflictingUser = users.find(user => user.email === name)
 
       if (conflictingUser !== undefined) {
+        // names of accounts created by organizations are chosen by tenants: never bind a provider identity to them
+        if (conflictingUser.tenantOf !== undefined) {
+          throw new Error(`User with username ${name} already exists`)
+        }
         if (!this._app.config.get('authentication.mergeProvidersUsers')) {
           throw new Error(`User with name ${name} already exists`)
         }

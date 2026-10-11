@@ -336,4 +336,31 @@ export class ProjectController extends Controller {
     this.setStatus(createdResp.status)
     return { id: vmId }
   }
+
+  /**
+   * Takes a snapshot of an instance of the project, within the snapshot quota.
+   *
+   * Requires the member role in the project.
+   *
+   * @example body { "name_label": "before-upgrade" }
+   */
+  @Extension('x-mcp-exposure', 'confirm')
+  @Post('{id}/vms/{vmId}/actions/snapshot')
+  @Security('*', ['acl'])
+  @Middlewares(json())
+  @SuccessResponse(createdResp.status, createdResp.description)
+  @Response(forbiddenOperationResp.status, forbiddenOperationResp.description)
+  @Response(notFoundResp.status, notFoundResp.description)
+  async snapshotVm(
+    @Path() id: string,
+    @Path() vmId: string,
+    @Body() body: { name_label?: string }
+  ): Promise<{ id: string }> {
+    await this.#restApi.xoApp.assertProjectRole(this.#user, id as XoProject['id'], 'member')
+    const snapshotId = await this.#restApi.xoApp.snapshotProjectVm(id as XoProject['id'], vmId as XoVm['id'], {
+      name: body.name_label,
+    })
+    this.setStatus(createdResp.status)
+    return { id: snapshotId }
+  }
 }
