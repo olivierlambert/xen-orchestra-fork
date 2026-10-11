@@ -728,6 +728,8 @@ export type XoOrganization = {
   id: Branded<'organization'>
   name: string
   members: Record<XoUser['id'], XoOrganizationRole>
+  /** XO group of the organization admins, the admin role of every project is attached to it */
+  adminGroupId: XoGroup['id']
 }
 
 export type XoProjectRole = 'viewer' | 'member' | 'admin'

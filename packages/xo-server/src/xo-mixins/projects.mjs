@@ -21,7 +21,12 @@ import {
  * @typedef {typeof ORGANIZATION_ROLES[number]} OrganizationRole
  * @typedef {Partial<Record<typeof QUOTA_KEYS[number], number>>} Quota
  * @typedef {{ pools: string[], templates: string[], networks: string[], srs: string[] }} Scope
- * @typedef {{ id: string, name: string, members: Record<string, OrganizationRole> }} Organization
+ * @typedef {{
+ *   id: string,
+ *   name: string,
+ *   members: Record<string, OrganizationRole>,
+ *   adminGroupId: string,
+ * }} Organization
  * @typedef {{
  *   id: string,
  *   organizationId: string,
@@ -33,6 +38,13 @@ import {
  * }} Project
  * @typedef {{ id: string, permission: string }} User
  */
+
+/**
+ * XO group names are unique, organization names do not have to be
+ *
+ * @param {{ id: string, name: string }} organization
+ */
+const adminGroupName = ({ id, name }) => `${name}: organization admins (${id.slice(0, 8)})`
 
 const EMPTY_SCOPE = { pools: [], templates: [], networks: [], srs: [] }
 
@@ -68,7 +80,8 @@ function normalizeScope(scope = {}) {
  * Tenant model: an organization (a customer) owns projects, a project owns instances and has a quota.
  *
  * Permissions inside a project are plain ACL v2 roles, generated per project and scoped to the objects owned
- * by the project with a `$project` selector. Ownership is recorded by XO in the objects `other_config` when
+ * by the project with a `$project` selector. Organization admins are members of an XO group generated per
+ * organization, to which the admin role of every project of the organization is attached. Ownership is recorded by XO in the objects `other_config` when
  * they are created through the project, and cannot be changed by tenants.
  */
 export default class Projects_ {
@@ -128,8 +141,16 @@ export default class Projects_ {
    * @param {{ name: string }} params
    * @returns {Promise<Organization>}
    */
-  createOrganization({ name }) {
-    return this.#organizations.add({ name, members: {} })
+  async createOrganization({ name }) {
+    const organization = await this.#organizations.add({ name, members: {} })
+    try {
+      const group = await this._app.createGroup({ name: adminGroupName(organization) })
+      organization.adminGroupId = group.id
+      return await this.#organizations.update(organization)
+    } catch (error) {
+      await this.#organizations.remove(organization.id)
+      throw error
+    }
   }
 
   /**
@@ -157,6 +178,7 @@ export default class Projects_ {
     const organization = await this.getOrganization(id)
     if (name !== undefined) {
       organization.name = name
+      await this._app.updateGroup(organization.adminGroupId, { name: adminGroupName(organization) })
     }
     return this.#organizations.update(organization)
   }
@@ -169,6 +191,8 @@ export default class Projects_ {
     if ((await this.#projects.get({ organizationId: id })).length !== 0) {
       throw forbiddenOperation('delete organization', 'the organization still has projects')
     }
+    const { adminGroupId } = await this.getOrganization(id)
+    await this._app.deleteGroup(adminGroupId)
     await this.#organizations.remove(id)
   }
 
@@ -187,6 +211,7 @@ export default class Projects_ {
     }
 
     const organization = await this.getOrganization(id)
+    const wasAdmin = organization.members[userId] === 'admin'
     if (role === null) {
       const projects = await this.#projects.get({ organizationId: id })
       await Promise.all(projects.map(project => this.setProjectMember(project.id, userId, null)))
@@ -194,6 +219,13 @@ export default class Projects_ {
     } else {
       await this._app.getUser(userId)
       organization.members[userId] = role
+    }
+
+    // the admin group carries the admin role of every project of the organization
+    if (role === 'admin' && !wasAdmin) {
+      await this._app.addUserToGroup(userId, organization.adminGroupId)
+    } else if (role !== 'admin' && wasAdmin) {
+      await this._app.removeUserFromGroup(userId, organization.adminGroupId)
     }
     await this.#organizations.update(organization)
   }
@@ -241,6 +273,7 @@ export default class Projects_ {
         await this._app.createAclV2Privilege({ ...privilege, roleId })
       }
     }
+    await this._app.addAclV2GroupRole(organization.adminGroupId, project.roleIds.admin)
 
     return this.#projects.update(project)
   }
@@ -473,13 +506,9 @@ export default class Projects_ {
     const app = this._app
     const template = app.getObject(templateId, 'VM-template')
 
+    // existing disks of the template, the ones described by default templates are not created by XO
     /** @type {Record<string, number>} */
     const templateDisks = {}
-    // disks described by default templates, created at instantiation
-    for (const disk of template.template_info?.disks ?? []) {
-      templateDisks[disk.device] = disk.size
-    }
-    // existing disks of custom templates
     for (const vbdId of template.$VBDs) {
       const vbd = app.getObject(vbdId, 'VBD')
       if (!vbd.is_cd_drive && vbd.VDI !== undefined) {
@@ -488,7 +517,7 @@ export default class Projects_ {
     }
 
     const request = estimateVmResources(
-      { cpus: template.CPUs.number, memory: template.memory.size, templateDisks },
+      { cpus: template.CPUs.number, memory: template.memory.dynamic?.[1] ?? template.memory.size, templateDisks },
       params
     )
     const { quota, usage } = await this.getProjectUsage(id)

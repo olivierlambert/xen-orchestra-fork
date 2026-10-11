@@ -82,7 +82,12 @@ describe('computeProjectUsage()', function () {
     const vm = (type, cpus, memory) => ({ type, CPUs: { number: cpus }, memory: { size: memory } })
     assert.deepEqual(
       computeProjectUsage(
-        [vm('VM', 2, 4 * GiB), vm('VM', 4, 8 * GiB), vm('VM-snapshot', 2, 4 * GiB)],
+        [
+          vm('VM', 2, 4 * GiB),
+          // running VM using less than allocated
+          { ...vm('VM', 4, 1 * GiB), memory: { size: 1 * GiB, dynamic: [8 * GiB, 8 * GiB] } },
+          vm('VM-snapshot', 2, 4 * GiB),
+        ],
         [{ size: 20 * GiB }, { size: 20 * GiB }]
       ),
       { instances: 2, vcpus: 6, memory: 12 * GiB, storage: 40 * GiB, snapshots: 1 }

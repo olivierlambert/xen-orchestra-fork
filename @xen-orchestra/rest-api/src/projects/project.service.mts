@@ -74,19 +74,7 @@ export class ProjectService {
         name: pool.name_label,
       })),
       templates: resolve<XoVmTemplate, ProjectTemplate>(scope.templates, 'VM-template', template => {
-        const disks = new Map<string, number>()
-        // the provisioning XML of default templates also has a `device` attribute, missing from the type
-        for (const disk of template.template_info.disks as { device?: string; size: number }[]) {
-          if (disk.device !== undefined) {
-            disks.set(String(disk.device), disk.size)
-          }
-        }
-        for (const vbdId of template.$VBDs) {
-          const vbd = restApi.getObject<XoVbd>(vbdId, 'VBD')
-          if (!vbd.is_cd_drive && vbd.VDI !== undefined) {
-            disks.set(vbd.position, restApi.getObject<XoVdi>(vbd.VDI as XoVdi['id'], 'VDI').size)
-          }
-        }
+        const disks = this.#getTemplateDisks(template.id)
         return {
           id: template.id,
           uuid: template.uuid,
@@ -94,7 +82,7 @@ export class ProjectService {
           poolId: template.$pool,
           cpus: template.CPUs.number,
           memory: template.memory.size,
-          disks: Array.from(disks, ([userdevice, size]) => ({ userdevice, size })),
+          disks: Array.from(disks, ([userdevice, { size }]) => ({ userdevice, size })),
         }
       }),
       networks: resolve<XoNetwork, ProjectResource>(scope.networks, 'network', network => ({
@@ -122,6 +110,25 @@ export class ProjectService {
 
   async setMember(id: XoProject['id'], userId: XoUser['id'], role: XoProjectRole | null) {
     await this.#xoApp.setProjectMember(id, userId, role)
+  }
+
+  /**
+   * Existing disks of a template, by user device.
+   *
+   * The disks described by default templates in `other_config` are not included: XO does not create them, only
+   * the ones passed in `vdis`.
+   */
+  #getTemplateDisks(templateId: XoVmTemplate['id']) {
+    const restApi = this.#restApi
+    const disks = new Map<string, { size: number; sr: XoSr['id'] }>()
+    for (const vbdId of restApi.getObject<XoVmTemplate>(templateId, 'VM-template').$VBDs) {
+      const vbd = restApi.getObject<XoVbd>(vbdId, 'VBD')
+      if (!vbd.is_cd_drive && vbd.VDI !== undefined) {
+        const vdi = restApi.getObject<XoVdi>(vbd.VDI as XoVdi['id'], 'VDI')
+        disks.set(vbd.position, { size: vdi.size, sr: vdi.$SR })
+      }
+    }
+    return disks
   }
 
   /**
@@ -162,15 +169,30 @@ export class ProjectService {
       }
     }
 
+    // every disk of the new VM must end up on an SR of the scope: the kept disks of the template stay on their
+    // SR, and a disk whose user device matches no disk of the template is created, on the default SR if none
+    // is given
+    const srsByUserdevice = new Map(
+      Array.from(this.#getTemplateDisks(templateId), ([userdevice, { sr }]) => [userdevice, sr])
+    )
+    const newDiskSrs: (string | undefined)[] = []
     for (const vdi of body.vdis ?? []) {
       if ('destroy' in vdi) {
-        continue
+        srsByUserdevice.delete(vdi.userdevice)
+      } else if ('userdevice' in vdi && srsByUserdevice.has(vdi.userdevice)) {
+        if (vdi.sr !== undefined) {
+          srsByUserdevice.set(vdi.userdevice, vdi.sr as XoSr['id'])
+        }
+      } else {
+        newDiskSrs.push(vdi.sr)
       }
-      if (!('userdevice' in vdi) && vdi.sr === undefined) {
+    }
+    for (const sr of [...srsByUserdevice.values(), ...newDiskSrs]) {
+      if (sr === undefined) {
         throw forbiddenOperation('create VM', 'new disks must specify an SR')
       }
-      if (vdi.sr !== undefined && !scope.srs.includes(vdi.sr as XoSr['id'])) {
-        throw forbiddenOperation('create VM', `the SR ${vdi.sr} is not available to the project`)
+      if (!scope.srs.includes(sr as XoSr['id'])) {
+        throw forbiddenOperation('create VM', `the SR ${sr} is not available to the project`)
       }
     }
 

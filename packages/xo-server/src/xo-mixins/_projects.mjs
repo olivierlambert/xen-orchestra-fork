@@ -92,7 +92,9 @@ export function getProjectRolePrivileges(projectId, role) {
 }
 
 /**
- * @param {{ type: string, CPUs: { number: number }, memory: { size: number } }[]} vms objects of type VM or VM-snapshot
+ * Memory counts what is allocated (dynamic max), not `memory.size` which is the actual usage of running VMs.
+ *
+ * @param {{ type: string, CPUs: { number: number }, memory: { size: number, dynamic?: number[] } }[]} vms objects of type VM or VM-snapshot
  * @param {{ size: number }[]} vdis objects of type VDI or VDI-snapshot
  */
 export function computeProjectUsage(vms, vdis) {
@@ -101,7 +103,7 @@ export function computeProjectUsage(vms, vdis) {
     if (vm.type === 'VM') {
       usage.instances++
       usage.vcpus += vm.CPUs.number
-      usage.memory += vm.memory.size
+      usage.memory += vm.memory.dynamic?.[1] ?? vm.memory.size
     } else if (vm.type === 'VM-snapshot') {
       usage.snapshots++
     }
@@ -131,8 +133,8 @@ export function getExceededQuotas(quota, usage, request) {
 /**
  * Estimates the resources a VM created from a template will use.
  *
- * `templateDisks` are the existing disks of the template, by user device. Default templates which describe
- * their disks in `other_config` are not accounted for: their disks are counted once created.
+ * `templateDisks` are the existing disks of the template, by user device. The disks described by default
+ * templates in `other_config` are not created by XO, only the ones passed in `vdis` are.
  *
  * @param {{ cpus: number, memory: number, templateDisks: Record<string, number> }} template
  * @param {{ cpus?: number, memory?: number, vdis?: ({ size?: number, userdevice?: string, destroy?: boolean })[] }} params

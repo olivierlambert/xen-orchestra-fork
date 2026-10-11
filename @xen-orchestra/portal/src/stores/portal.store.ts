@@ -81,7 +81,7 @@ type XoVm = {
   name_label: string
   power_state: 'Running' | 'Halted' | 'Paused' | 'Suspended'
   CPUs: { number: number }
-  memory: { size: number }
+  memory: { size: number; dynamic: [number, number] }
   mainIpAddress?: string
   creation?: { date?: string }
   other?: Record<string, string>
@@ -383,7 +383,8 @@ export const usePortalStore = defineStore('portal', () => {
   const knownDiskSizes = reactive(new Map<string, number>())
 
   function toInstance(vm: XoVm): Instance {
-    const memoryGiB = toGiB(vm.memory.size)
+    // allocated memory: `size` is the actual usage of running VMs
+    const memoryGiB = toGiB(vm.memory.dynamic[1])
     const baseTemplate = vm.other?.base_template_name ?? ''
     const template = liveProject.value?.resources.templates.find(template => template.name === baseTemplate)
     const createdAt = Date.parse(vm.creation?.date ?? '')
@@ -628,6 +629,8 @@ export const usePortalStore = defineStore('portal', () => {
   }
 
   const POWER_ACTIONS = { start: 'start', stop: 'clean_shutdown', reboot: 'clean_reboot' } as const
+  // used when the guest cannot cooperate (no guest tools), like the "force stop" of public clouds
+  const FORCED_POWER_ACTIONS = { stop: 'hard_shutdown', reboot: 'hard_reboot' } as const
 
   async function powerAction(id: string, action: 'start' | 'stop' | 'reboot') {
     const instance = getInstance(id)!
@@ -635,8 +638,20 @@ export const usePortalStore = defineStore('portal', () => {
 
     if (backend.value === 'xo') {
       await guard(async () => {
-        await xo.post(`/vms/${id}/actions/${POWER_ACTIONS[action]}?sync=true`)
-        log(label)
+        try {
+          await xo.post(`/vms/${id}/actions/${POWER_ACTIONS[action]}?sync=true`)
+          log(label)
+        } catch (error) {
+          if (action === 'start' || !(error instanceof XoApiError) || !error.message.includes('VM_LACKS_FEATURE')) {
+            throw error
+          }
+          await refreshInstances()
+          // the clean operation may have been half done before failing
+          if (action === 'reboot' || getInstance(id)?.state !== 'halted') {
+            await xo.post(`/vms/${id}/actions/${FORCED_POWER_ACTIONS[action]}?sync=true`)
+          }
+          log(`${label} (forced, the instance has no guest tools)`)
+        }
         await refreshInstances()
       })
       return

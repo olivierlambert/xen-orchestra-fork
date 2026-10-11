@@ -138,6 +138,10 @@ export class VmService {
         await setOtherConfig('VDI', vdiRef)
       }
     }
+
+    // the XO objects must carry their project before returning: the creation is listed right away, and the next
+    // quota check of the project counts it
+    await xapi.barrier(xapiVm.$ref)
   }
 
   getVmsStatus(opts?: { filter?: string | ((obj: XoVm) => boolean) }) {
