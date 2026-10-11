@@ -29,8 +29,10 @@
       </UiCard>
       <UiCard>
         <UiCardTitle>Public IPs</UiCardTitle>
-        <span class="typo-h2 amount">{{ store.floatingIps.length }}</span>
-        <span class="typo-body-regular-small muted">{{ attachedIps }} attached to an instance</span>
+        <span class="typo-h2 amount">{{ store.usage.floatingIps }}</span>
+        <span v-if="!store.hasPublicIpPools" class="typo-body-regular-small muted">
+          {{ attachedIps }} attached to an instance
+        </span>
       </UiCard>
       <UiCard>
         <UiCardTitle>Protected by backups</UiCardTitle>
@@ -43,7 +45,7 @@
       <UiCard>
         <UiCardTitle>
           Quotas
-          <template #description>Limits set by {{ PROVIDER.name }} for this project</template>
+          <template #description>Limits set by {{ store.provider.name }} for this project</template>
         </UiCardTitle>
         <div class="quotas">
           <VtsProgressBar
@@ -77,7 +79,6 @@
 <script lang="ts" setup>
 import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
-import { PROVIDER } from '@/mock/data.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
 import { formatHourlyPrice, formatMoney, formatMonthlyPrice } from '@/utils/format.ts'
 import VtsProgressBar from '@core/components/progress-bar/VtsProgressBar.vue'

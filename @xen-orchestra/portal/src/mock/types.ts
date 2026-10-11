@@ -2,6 +2,16 @@
 // Everything here is mocked for the prototype: none of these concepts exist in xo-server yet,
 // except instances (VMs), templates, snapshots and tokens which map to existing objects.
 
+/** branding and public prices, from the `[portal]` section of the xo-server configuration in live mode */
+export type Provider = {
+  name: string
+  logoUrl?: string
+  supportUrl?: string
+  color?: string
+  currency: string
+  prices: { storagePerGiBMonth: number; snapshotPerGiBMonth: number; ipPerHour: number }
+}
+
 export type Organization = {
   id: string
   name: string
@@ -57,6 +67,8 @@ export type Instance = {
   templateId: string
   networkId: string
   privateIp: string
+  /** addresses from the IP pools of the project (live mode) */
+  publicIps?: string[]
   extraDiskGiB: number
   /** actual total disk size when known (live mode), otherwise derived from the offering */
   diskGiB?: number

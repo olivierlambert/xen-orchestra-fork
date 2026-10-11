@@ -41,6 +41,8 @@ export default defineConfig({
                 })
               },
             },
+            // instance consoles (websocket)
+            '/api': { target: process.env.XO_URL, changeOrigin: true, secure: false, ws: true },
           },
   },
 })

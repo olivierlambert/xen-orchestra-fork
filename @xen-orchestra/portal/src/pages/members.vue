@@ -103,6 +103,10 @@
           project.
         </template>
       </UiCardTitle>
+      <UiAlert v-if="resetResult" accent="success" close @close="resetResult = undefined">
+        New password of {{ resetResult.name }}: <code>{{ resetResult.password }}</code
+        >. Share it with them, it is shown only once.
+      </UiAlert>
       <VtsTable>
         <thead>
           <tr>
@@ -131,16 +135,26 @@
               </UiTag>
             </UiTableCell>
             <UiTableCell v-if="store.canManageOrganization">
-              <UiButton
-                v-if="member.userId !== store.currentUser.id"
-                variant="tertiary"
-                accent="danger"
-                size="small"
-                left-icon="fa:trash"
-                @click="store.setOrganizationMember(member.userId, null)"
-              >
-                Remove from organization
-              </UiButton>
+              <div v-if="member.userId !== store.currentUser.id" class="actions">
+                <UiButton
+                  variant="tertiary"
+                  accent="brand"
+                  size="small"
+                  left-icon="fa:lock"
+                  @click="resetPassword(member.userId, member.name)"
+                >
+                  Reset password
+                </UiButton>
+                <UiButton
+                  variant="tertiary"
+                  accent="danger"
+                  size="small"
+                  left-icon="fa:trash"
+                  @click="store.setOrganizationMember(member.userId, null)"
+                >
+                  Remove from organization
+                </UiButton>
+              </div>
             </UiTableCell>
           </VtsRow>
         </tbody>
@@ -200,6 +214,7 @@ import VtsHeaderCell from '@core/components/table/cells/VtsHeaderCell.vue'
 import VtsTextCell from '@core/components/table/cells/VtsTextCell.vue'
 import VtsRow from '@core/components/table/VtsRow.vue'
 import VtsTable from '@core/components/table/VtsTable.vue'
+import UiAlert from '@core/components/ui/alert/UiAlert.vue'
 import UiButton from '@core/components/ui/button/UiButton.vue'
 import UiCard from '@core/components/ui/card/UiCard.vue'
 import UiCardTitle from '@core/components/ui/card-title/UiCardTitle.vue'
@@ -256,6 +271,15 @@ watch(
 
 async function addMember() {
   await store.setProjectMember(newMemberId.value!, newMemberRole.value)
+}
+
+const resetResult = ref<{ name: string; password: string }>()
+
+async function resetPassword(userId: string, name: string) {
+  const password = await store.resetMemberPassword(userId)
+  if (password !== undefined) {
+    resetResult.value = { name, password }
+  }
 }
 
 const newUserName = ref<string | number | undefined>('')
@@ -323,6 +347,12 @@ async function createUser() {
 
 .muted {
   color: var(--color-neutral-txt-secondary);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
 }
 
 @media (max-width: 1024px) {

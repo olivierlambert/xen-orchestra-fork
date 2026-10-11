@@ -2,8 +2,9 @@
   <CoreLayout class="portal-layout">
     <template #header-start>
       <RouterLink class="brand" to="/dashboard">
-        <VtsIcon name="fa:city" size="medium" class="brand-icon" />
-        <span v-if="!uiStore.isSmall" class="typo-h4">{{ PROVIDER.name }}</span>
+        <img v-if="store.provider.logoUrl" :src="store.provider.logoUrl" alt="" class="brand-logo" />
+        <VtsIcon v-else name="fa:city" size="medium" class="brand-icon" />
+        <span v-if="!uiStore.isSmall" class="typo-h4">{{ store.provider.name }}</span>
       </RouterLink>
       <UiButtonIcon
         accent="brand"
@@ -19,14 +20,14 @@
         v-if="!uiStore.isSmall"
         size="medium"
         icon="fa:headset"
-        :href="PROVIDER.supportUrl"
+        :href="store.provider.supportUrl"
         target="_blank"
         rel="noopener noreferrer"
       >
         Support
       </UiLink>
       <div class="account">
-        <span class="avatar typo-body-bold-small">{{ initials }}</span>
+        <RouterLink v-tooltip="'Account'" to="/account" class="avatar typo-body-bold-small">{{ initials }}</RouterLink>
         <div class="account-text">
           <span class="typo-body-bold-small">{{ store.currentUser.name }}</span>
           <span class="typo-body-regular-small org">{{ store.organization.name }}</span>
@@ -61,7 +62,7 @@
           <div class="prototype-notice typo-body-regular-small">
             <VtsIcon name="fa:info-circle" size="small" />
             <template v-if="store.backend === 'xo'">
-              Connected to Xen Orchestra. Networking, backups, billing and API keys are previews.
+              Connected to Xen Orchestra. Virtual routers, floating IPs and the firewall are previews.
             </template>
             <template v-else>Prototype: all data is mocked</template>
           </div>
@@ -69,6 +70,10 @@
       </VtsLayoutSidebar>
     </template>
     <template #content>
+      <UiAlert v-if="store.organizationSuspended" accent="warning" class="error">
+        {{ store.organization.name }} is suspended by {{ store.provider.name }}: instances are stopped and cannot be
+        managed. Contact {{ store.provider.name }} to restore the service.
+      </UiAlert>
       <UiAlert v-if="store.lastError" accent="danger" close class="error" @close="store.lastError = undefined">
         {{ store.lastError }}
       </UiAlert>
@@ -79,7 +84,6 @@
 
 <script lang="ts" setup>
 import ProjectSwitcher from '@/components/ProjectSwitcher.vue'
-import { PROVIDER } from '@/mock/data.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
 import type { IconName } from '@core/icons'
 import VtsIcon from '@core/components/icon/VtsIcon.vue'
@@ -137,6 +141,10 @@ const navigation: { to: string; label: string; icon: IconName }[] = [
     color: var(--color-brand-txt-base);
   }
 
+  .brand-logo {
+    height: 3.2rem;
+  }
+
   .brand-icon {
     font-size: 2.4rem;
   }
@@ -166,6 +174,7 @@ const navigation: { to: string; label: string; icon: IconName }[] = [
     border-radius: 50%;
     background-color: var(--color-brand-item-base);
     color: var(--color-brand-txt-item);
+    text-decoration: none;
   }
 
   .nav {

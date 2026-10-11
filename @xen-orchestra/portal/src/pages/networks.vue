@@ -2,8 +2,9 @@
   <PageHeader title="Networking" icon="fa:network-wired" />
   <PageContent>
     <PreviewNotice>
-      Preview: private networks below are the networks your provider made available to the project. Virtual routers,
-      public IPs, port forwarding and firewall rules are not in Xen Orchestra yet, changes stay in your browser.
+      Preview: the private networks below are the networks your provider made available to the project, and public IPs
+      are given to instances at creation from the pools of the project. Virtual routers, floating IPs, port forwarding
+      and firewall rules are not in Xen Orchestra yet: changes on this page stay in your browser.
     </PreviewNotice>
     <!-- PRIVATE NETWORKS -->
     <UiCard>

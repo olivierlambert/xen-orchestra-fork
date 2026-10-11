@@ -2,8 +2,9 @@
   <main class="login-page">
     <UiCard class="card">
       <div class="brand">
-        <VtsIcon name="fa:city" size="medium" class="brand-icon" />
-        <span class="typo-h3">{{ PROVIDER.name }}</span>
+        <img v-if="store.provider.logoUrl" :src="store.provider.logoUrl" alt="" class="brand-logo" />
+        <VtsIcon v-else name="fa:city" size="medium" class="brand-icon" />
+        <span class="typo-h3">{{ store.provider.name }}</span>
       </div>
       <form class="form" @submit.prevent @keyup.enter="canSubmit && submit()">
         <FormField label="Email" for="login-name">
@@ -24,7 +25,6 @@
 <script lang="ts" setup>
 import { XoApiError } from '@/api/xo.ts'
 import FormField from '@/components/FormField.vue'
-import { PROVIDER } from '@/mock/data.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
 import VtsIcon from '@core/components/icon/VtsIcon.vue'
 import UiButton from '@core/components/ui/button/UiButton.vue'
@@ -75,6 +75,10 @@ async function submit() {
   align-items: center;
   gap: 0.8rem;
   color: var(--color-brand-txt-base);
+}
+
+.brand-logo {
+  height: 3.2rem;
 }
 
 .brand-icon {

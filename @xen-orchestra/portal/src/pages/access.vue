@@ -1,16 +1,17 @@
 <template>
   <PageHeader title="API & SSH keys" icon="fa:lock" />
   <PageContent>
-    <PreviewNotice>
-      Preview: project-scoped API keys are not in Xen Orchestra yet. SSH keys added here are injected into the new
-      instances you create in this session.
-    </PreviewNotice>
     <UiCard>
       <UiCardTitle>
         API keys
         <template #info>{{ store.apiKeys.length }}</template>
         <template #description>
-          For Terraform, Ansible, the CLI or your own scripts. A key is limited to this organization and to its role.
+          For Terraform, Ansible, the CLI or your own scripts.
+          {{
+            store.isLive
+              ? 'A key has the rights of your account: your roles in the projects of your organization.'
+              : 'A key is limited to this organization and to its role.'
+          }}
         </template>
       </UiCardTitle>
       <UiCard v-if="newSecret" class="secret">
@@ -28,7 +29,7 @@
           <tr>
             <VtsHeaderCell>Name</VtsHeaderCell>
             <VtsHeaderCell>Key</VtsHeaderCell>
-            <VtsHeaderCell>Role</VtsHeaderCell>
+            <VtsHeaderCell v-if="!store.isLive">Role</VtsHeaderCell>
             <VtsHeaderCell>Created</VtsHeaderCell>
             <VtsHeaderCell>Last used</VtsHeaderCell>
             <VtsHeaderCell>Actions</VtsHeaderCell>
@@ -38,7 +39,7 @@
           <VtsRow v-for="key of store.apiKeys" :key="key.id">
             <VtsTextCell>{{ key.name }}</VtsTextCell>
             <VtsTextCell>{{ key.prefix }}…</VtsTextCell>
-            <VtsTextCell>{{ ROLES[key.role] }}</VtsTextCell>
+            <VtsTextCell v-if="!store.isLive">{{ ROLES[key.role] }}</VtsTextCell>
             <VtsTextCell>{{ formatDate(key.createdAt) }}</VtsTextCell>
             <UiTableCell>
               <VtsRelativeTime v-if="key.lastUsedAt" :date="key.lastUsedAt" />
@@ -62,7 +63,7 @@
         <FormField label="Name" for="key-name">
           <UiInput id="key-name" v-model="keyName" accent="brand" />
         </FormField>
-        <FormField label="Role" for="key-role">
+        <FormField v-if="!store.isLive" label="Role" for="key-role">
           <NativeSelect id="key-role" v-model="keyRole">
             <option v-for="(label, role) of ROLES" :key="role" :value="role">{{ label }}</option>
           </NativeSelect>
@@ -99,7 +100,7 @@
           <VtsRow v-for="key of store.sshKeys" :key="key.id">
             <VtsTextCell>{{ key.name }}</VtsTextCell>
             <VtsTextCell>{{ key.fingerprint }}</VtsTextCell>
-            <VtsTextCell>{{ formatDate(key.createdAt) }}</VtsTextCell>
+            <VtsTextCell>{{ key.createdAt ? formatDate(key.createdAt) : '-' }}</VtsTextCell>
             <UiTableCell>
               <UiButton
                 variant="tertiary"
@@ -143,7 +144,6 @@ import FormField from '@/components/FormField.vue'
 import NativeSelect from '@/components/NativeSelect.vue'
 import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
-import PreviewNotice from '@/components/PreviewNotice.vue'
 import type { ApiKey } from '@/mock/types.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
 import { formatDate } from '@/utils/format.ts'
@@ -175,8 +175,8 @@ const keyName = ref<string | number | undefined>('')
 const keyRole = ref<string | number | undefined>('project-member')
 const newSecret = ref<string>()
 
-function createKey() {
-  newSecret.value = store.createApiKey(String(keyName.value).trim(), keyRole.value as ApiKey['role'])
+async function createKey() {
+  newSecret.value = await store.createApiKey(String(keyName.value).trim(), keyRole.value as ApiKey['role'])
   keyName.value = ''
 }
 
@@ -189,8 +189,8 @@ const isSshKeyValid = computed(
     /^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp\d+) [A-Za-z0-9+/=]+/.test(sshPublicKey.value.trim())
 )
 
-function addSshKey() {
-  store.addSshKey(String(sshName.value).trim(), sshPublicKey.value.trim())
+async function addSshKey() {
+  await store.addSshKey(String(sshName.value).trim(), sshPublicKey.value.trim())
   sshName.value = ''
   sshPublicKey.value = ''
 }

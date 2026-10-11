@@ -19,12 +19,25 @@ import VtsTooltipList from '@core/components/tooltip-list/VtsTooltipList.vue'
 import { useUiStore } from '@core/stores/ui.store'
 import { useActiveElement, useMagicKeys, whenever } from '@vueuse/core'
 import { logicAnd } from '@vueuse/math'
-import { computed } from 'vue'
+import { computed, watchEffect } from 'vue'
 
 const uiStore = useUiStore()
 const store = usePortalStore()
 
 store.init()
+
+// provider branding: name in the tab, brand color for links, buttons and the active navigation
+watchEffect(() => {
+  document.title = store.provider.name
+  const { style } = document.documentElement
+  for (const name of ['--color-brand-txt-base', '--color-brand-item-base']) {
+    if (store.provider.color === undefined) {
+      style.removeProperty(name)
+    } else {
+      style.setProperty(name, store.provider.color)
+    }
+  }
+})
 
 // Same shortcut as XO 6 to preview both color modes
 const activeElement = useActiveElement()

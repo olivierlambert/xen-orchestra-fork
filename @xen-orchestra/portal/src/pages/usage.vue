@@ -7,15 +7,15 @@
     </template>
   </PageHeader>
   <PageContent>
-    <PreviewNotice>
-      Preview: costs are estimated in your browser from the current resources of the project. Usage records will come
-      from Xen Orchestra.
-    </PreviewNotice>
+    <UiInfo v-if="store.isLive" accent="info" wrap>
+      Computed from the hourly usage records of Xen Orchestra and the prices of {{ store.provider.name }}. Each sample
+      counts until the next one.
+    </UiInfo>
     <div class="columns">
       <UiCard>
         <UiCardTitle>
           {{ monthLabel }}, month to date
-          <template #description>Estimated charges. Your invoice is issued by {{ PROVIDER.name }}.</template>
+          <template #description>Estimated charges. Your invoice is issued by {{ store.provider.name }}.</template>
         </UiCardTitle>
         <span class="typo-h1 amount">{{ formatMoney(store.monthToDateCost) }}</span>
         <span class="typo-body-regular-small muted">
@@ -55,7 +55,7 @@
       </VtsTable>
       <div class="api typo-body-regular-small">
         <span class="muted">API</span>
-        <code>GET /rest/v0/projects/{{ store.project.id }}/usage?from={{ monthStartIso }}</code>
+        <code>GET /rest/v0/projects/{{ store.project.id }}/usage-records?from={{ monthStart.getTime() }}</code>
       </div>
     </UiCard>
   </PageContent>
@@ -64,8 +64,6 @@
 <script lang="ts" setup>
 import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
-import PreviewNotice from '@/components/PreviewNotice.vue'
-import { PROVIDER } from '@/mock/data.ts'
 import type { UsageCategory } from '@/mock/types.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
 import { formatMoney, formatNumber } from '@/utils/format.ts'
@@ -78,9 +76,12 @@ import VtsTable from '@core/components/table/VtsTable.vue'
 import UiButton from '@core/components/ui/button/UiButton.vue'
 import UiCard from '@core/components/ui/card/UiCard.vue'
 import UiCardTitle from '@core/components/ui/card-title/UiCardTitle.vue'
-import { computed } from 'vue'
+import UiInfo from '@core/components/ui/info/UiInfo.vue'
+import { computed, onMounted } from 'vue'
 
 const store = usePortalStore()
+
+onMounted(() => store.loadUsageRecords())
 
 const CATEGORIES: Record<UsageCategory, { label: string; accent: LegendItemAccent }> = {
   compute: { label: 'Compute', accent: 'info' },
@@ -94,7 +95,7 @@ const now = new Date()
 const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
 const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1)
 const monthLabel = now.toLocaleString('en', { month: 'long', year: 'numeric' })
-const monthStartIso = monthStart.toISOString().slice(0, 10)
+const monthLabelIso = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}`
 
 const projectedCost = computed(
   () => store.monthToDateCost + ((monthEnd.getTime() - now.getTime()) / 3600e3) * store.estimatedHourlyCost
@@ -110,7 +111,7 @@ const segments = computed(() =>
       Math.round(
         store.usageLines.filter(line => line.category === category).reduce((sum, line) => sum + line.cost, 0) * 100
       ) / 100,
-    unit: '€',
+    unit: store.provider.currency === 'EUR' ? '€' : store.provider.currency,
   }))
 )
 
@@ -130,7 +131,7 @@ function exportCsv() {
   const csv = rows.map(row => row.map(cell => `"${String(cell).replaceAll('"', '""')}"`).join(',')).join('\n')
   const link = document.createElement('a')
   link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
-  link.download = `usage-${store.project.id}-${monthStartIso}.csv`
+  link.download = `usage-${store.project.id}-${monthLabelIso}.csv`
   link.click()
   URL.revokeObjectURL(link.href)
 }

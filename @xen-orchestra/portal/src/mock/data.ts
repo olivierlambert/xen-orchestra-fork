@@ -12,6 +12,7 @@ import type {
   PortForward,
   Project,
   ProjectMember,
+  Provider,
   Quota,
   RestorePoint,
   Snapshot,
@@ -24,11 +25,11 @@ const HOUR = 3600e3
 const DAY = 24 * HOUR
 const now = Date.now()
 
-export const CURRENCY = 'EUR'
-
-export const PROVIDER = {
+export const PROVIDER: Provider = {
   name: 'Nimbus Hosting',
   supportUrl: 'https://example.org/support',
+  currency: 'EUR',
+  prices: { storagePerGiBMonth: 0.05, snapshotPerGiBMonth: 0.05, ipPerHour: 0.004 },
 }
 
 export const currentUser: User = { id: 'usr-camille', name: 'camille@acme.example', isAdmin: false }

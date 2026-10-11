@@ -93,7 +93,9 @@
         <UiCard>
           <UiCardTitle>
             5. Backups
-            <template #description>Policies are defined by {{ PROVIDER.name }}. You can change this later.</template>
+            <template #description>
+              Policies are defined by {{ store.provider.name }}. You can change this later.
+            </template>
           </UiCardTitle>
           <PreviewNotice />
           <div class="grid">
@@ -102,7 +104,7 @@
               <span class="typo-body-regular-small muted">You can still take manual snapshots</span>
             </SelectCard>
             <SelectCard
-              v-for="policy of backupPolicies"
+              v-for="policy of store.backupPolicies"
               :key="policy.id"
               :selected="backupPolicyId === policy.id"
               @click="backupPolicyId = policy.id"
@@ -162,7 +164,6 @@ import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import PreviewNotice from '@/components/PreviewNotice.vue'
 import SelectCard from '@/components/SelectCard.vue'
-import { backupPolicies, offerings, PROVIDER } from '@/mock/data.ts'
 import type { Offering } from '@/mock/types.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
 import { formatHourlyPrice, formatMoney, formatMonthlyPrice } from '@/utils/format.ts'
@@ -179,40 +180,46 @@ import UiTag from '@core/components/ui/tag/UiTag.vue'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
-const STORAGE_PRICE_PER_GIB_HOUR = 0.05 / 730
-
 const store = usePortalStore()
 const router = useRouter()
 
-const families: { id: Offering['family']; label: string }[] = [
+const FAMILIES: { id: Offering['family']; label: string }[] = [
   { id: 'general', label: 'General purpose' },
   { id: 'compute', label: 'CPU optimized' },
   { id: 'memory', label: 'Memory optimized' },
 ]
 
+// only the families the provider sells
+const families = computed(() => FAMILIES.filter(family => store.offerings.some(item => item.family === family.id)))
+
 const templateId = ref(store.templates[0]?.id)
 const selectedFamily = ref<Offering['family']>('general')
-const offeringId = ref('g1.medium')
+const offeringId = ref(store.offerings.find(item => item.id === 'g1.medium')?.id ?? store.offerings[0]?.id)
 const networkId = ref(store.networks[0]?.id)
 const extraDiskGiB = ref<string | number | undefined>(0)
 const sshKeyIds = ref(store.sshKeys.slice(0, 1).map(key => key.id))
-const backupPolicyId = ref<string | undefined>(backupPolicies[0].id)
+const backupPolicyId = ref<string | undefined>(store.backupPolicies[0]?.id)
 const name = ref<string | number | undefined>(`instance-${store.instances.length + 1}`)
 const creating = ref(false)
 
 const template = computed(() => (templateId.value === undefined ? undefined : store.getTemplate(templateId.value)))
 
-// the live templates and networks arrive after the page may have been opened
+// the live templates, networks and offerings arrive after the page may have been opened
 watch(
-  () => [store.templates, store.networks] as const,
-  ([templates, networks]) => {
+  () => [store.templates, store.networks, store.offerings] as const,
+  ([templates, networks, offerings]) => {
     if (!templates.some(item => item.id === templateId.value)) {
       templateId.value = templates[0]?.id
     }
     if (!networks.some(item => item.id === networkId.value)) {
       networkId.value = networks[0]?.id
     }
-  }
+    if (!offerings.some(item => item.id === offeringId.value)) {
+      offeringId.value = offerings[0]?.id
+      selectedFamily.value = offerings[0]?.family ?? 'general'
+    }
+  },
+  { immediate: true }
 )
 
 const networkInfo = computed(() =>
@@ -220,16 +227,18 @@ const networkInfo = computed(() =>
     ? 'Networks made available to the project by your provider'
     : 'Private network with DHCP, routed by the project router'
 )
-const offering = computed(() => store.getOffering(offeringId.value))
-const familyOfferings = computed(() => offerings.filter(offering => offering.family === selectedFamily.value))
+const offering = computed(() => store.getOffering(offeringId.value!))
+const familyOfferings = computed(() => store.offerings.filter(offering => offering.family === selectedFamily.value))
 const extraDisk = computed(() => Math.max(0, Number(extraDiskGiB.value) || 0))
 
 const extraDiskInfo = computed(() => {
   const left = store.quota.storageGiB - store.usage.storageGiB
-  return `${formatMoney(0.05)}/GiB·month. ${Number.isFinite(left) ? `${left} GiB left in quota.` : 'No storage quota.'}`
+  return `${formatMoney(store.provider.prices.storagePerGiBMonth)}/GiB·month. ${Number.isFinite(left) ? `${left} GiB left in quota.` : 'No storage quota.'}`
 })
 
-const hourlyPrice = computed(() => offering.value.pricePerHour + extraDisk.value * STORAGE_PRICE_PER_GIB_HOUR)
+const hourlyPrice = computed(
+  () => offering.value.pricePerHour + (extraDisk.value * store.provider.prices.storagePerGiBMonth) / 730
+)
 
 function fitsQuota(offering: Offering) {
   const { usage, quota } = store
@@ -239,7 +248,7 @@ function fitsQuota(offering: Offering) {
 const quotaError = computed(() => {
   const { usage, quota } = store
   if (usage.instances >= quota.instances) {
-    return `Instance quota reached (${quota.instances}). Delete an instance or ask ${PROVIDER.name} for more.`
+    return `Instance quota reached (${quota.instances}). Delete an instance or ask ${store.provider.name} for more.`
   }
   if (!fitsQuota(offering.value)) {
     return 'This size exceeds the vCPU or memory quota of the project.'

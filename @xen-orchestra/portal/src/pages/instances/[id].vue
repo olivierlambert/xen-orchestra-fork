@@ -100,7 +100,8 @@
             <dt>Private IP</dt>
             <dd>{{ instance.privateIp || '-' }}</dd>
             <dt>Public IP</dt>
-            <dd>{{ attachedIp?.address ?? 'None' }}</dd>
+            <dd v-if="instance.publicIps?.length">{{ instance.publicIps.join(', ') }}</dd>
+            <dd v-else>{{ attachedIp?.address ?? 'None' }}</dd>
             <dt>Port forwards</dt>
             <dd>
               <template v-if="forwards.length === 0">None</template>
@@ -179,11 +180,11 @@
         </UiCard>
 
         <UiCard>
-          <PreviewNotice />
           <UiCardTitle>
             Backups
             <template #description>
-              Offsite copies made by {{ PROVIDER.name }} on a schedule. Restore in place or as a new instance.
+              Offsite copies made by {{ store.provider.name }} on a schedule.
+              {{ store.canRestoreInPlace ? 'Restore in place or as a new instance.' : 'Restore as a new instance.' }}
             </template>
           </UiCardTitle>
           <div class="policies">
@@ -191,13 +192,16 @@
               <span class="typo-body-bold">No backups</span>
             </SelectCard>
             <SelectCard
-              v-for="policy of backupPolicies"
+              v-for="policy of store.backupPolicies"
               :key="policy.id"
               :selected="instance.backupPolicyId === policy.id"
               @click="setPolicy(policy.id)"
             >
               <span class="typo-body-bold">{{ policy.name }}</span>
-              <span class="typo-body-regular-small">{{ policy.schedule }} · keeps {{ policy.retention }}</span>
+              <span v-if="policy.retention" class="typo-body-regular-small">
+                {{ policy.schedule }} · keeps {{ policy.retention }}
+              </span>
+              <span v-else class="typo-body-regular-small">{{ policy.description }}</span>
             </SelectCard>
           </div>
           <UiInfo v-if="instance.backupPolicyId === undefined" accent="warning">
@@ -222,6 +226,7 @@
                 <UiTableCell>
                   <div class="actions">
                     <UiButton
+                      v-if="store.canRestoreInPlace"
                       variant="tertiary"
                       accent="warning"
                       size="small"
@@ -253,15 +258,19 @@
         <VtsStateHero v-if="instance.state !== 'running'" format="card" type="offline" size="medium">
           Console is available when the instance is running
         </VtsStateHero>
-        <div v-else class="console typo-body-regular">
-          <span>{{ template.name }} {{ template.version }} {{ instance.name }} tty1</span>
-          <span>&nbsp;</span>
-          <span>{{ instance.name }} login: <span class="cursor">_</span></span>
+        <div v-else-if="store.isLive" class="live-console">
+          <VtsRemoteConsole :url="consoleUrl" :is-console-available="!isBusy" />
         </div>
-        <UiInfo accent="info" wrap>
-          Prototype placeholder. The real portal would embed the same noVNC console as XO 6 (VtsRemoteConsole), proxied
-          through xo-server with a tenant-scoped token.
-        </UiInfo>
+        <template v-else>
+          <div class="console typo-body-regular">
+            <span>{{ template.name }} {{ template.version }} {{ instance.name }} tty1</span>
+            <span>&nbsp;</span>
+            <span>{{ instance.name }} login: <span class="cursor">_</span></span>
+          </div>
+          <UiInfo accent="info" wrap>
+            Mock console. Connected to Xen Orchestra, this is the noVNC console of XO 6, open to project members.
+          </UiInfo>
+        </template>
       </UiCard>
     </PageContent>
   </template>
@@ -272,12 +281,11 @@
 import InstanceStateTag from '@/components/InstanceStateTag.vue'
 import PageContent from '@/components/PageContent.vue'
 import PageHeader from '@/components/PageHeader.vue'
-import PreviewNotice from '@/components/PreviewNotice.vue'
 import SelectCard from '@/components/SelectCard.vue'
-import { backupPolicies, PROVIDER } from '@/mock/data.ts'
 import type { PortForward } from '@/mock/types.ts'
 import { usePortalStore } from '@/stores/portal.store.ts'
 import { formatDate, formatHourlyPrice } from '@/utils/format.ts'
+import VtsRemoteConsole from '@core/components/console/VtsRemoteConsole.vue'
 import VtsStateHero from '@core/components/state-hero/VtsStateHero.vue'
 import TabItem from '@core/components/tab/TabItem.vue'
 import TabList from '@core/components/tab/TabList.vue'
@@ -336,6 +344,10 @@ const sshKeyNames = computed(() =>
     .filter(key => instance.value!.sshKeyIds.includes(key.id))
     .map(key => key.name)
     .join(', ')
+)
+
+const consoleUrl = computed(
+  () => new URL(`/api/consoles/${instance.value!.id}`, window.location.origin.replace(/^http/, 'ws'))
 )
 
 const attachedIp = computed(() => store.floatingIps.find(ip => ip.instanceId === instance.value!.id))
@@ -439,6 +451,11 @@ async function restoreAsNew(pointId: string) {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
   gap: 1.2rem;
+}
+
+.live-console {
+  height: 60vh;
+  min-height: 40rem;
 }
 
 .console {

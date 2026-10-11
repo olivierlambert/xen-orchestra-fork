@@ -26,8 +26,7 @@
             <VtsHeaderCell>Name</VtsHeaderCell>
             <VtsHeaderCell>State</VtsHeaderCell>
             <VtsHeaderCell>Size</VtsHeaderCell>
-            <VtsHeaderCell>Private IP</VtsHeaderCell>
-            <VtsHeaderCell>Public IP</VtsHeaderCell>
+            <VtsHeaderCell>IP addresses</VtsHeaderCell>
             <VtsHeaderCell>Backups</VtsHeaderCell>
             <VtsHeaderCell>Price</VtsHeaderCell>
           </tr>
@@ -43,8 +42,9 @@
                 {{ store.getOffering(instance.offeringId).memoryGiB }} GiB
               </span>
             </VtsTextCell>
-            <VtsTextCell>{{ instance.privateIp }}</VtsTextCell>
-            <VtsTextCell>{{ publicIp(instance.id) ?? '-' }}</VtsTextCell>
+            <VtsTextCell>
+              {{ [publicIp(instance.id), instance.privateIp].filter(Boolean).join(' · ') || '-' }}
+            </VtsTextCell>
             <UiTableCell>
               <UiTag v-if="instance.backupPolicyId" accent="success" variant="secondary">
                 {{ store.getBackupPolicy(instance.backupPolicyId)!.name }}
@@ -103,6 +103,10 @@ const tableState = computed<TableState | undefined>(() => {
 })
 
 function publicIp(instanceId: string) {
+  const live = store.getInstance(instanceId)?.publicIps
+  if (live !== undefined && live.length !== 0) {
+    return live.join(', ')
+  }
   const direct = store.floatingIps.find(ip => ip.instanceId === instanceId)
   if (direct !== undefined) {
     return direct.address

@@ -1,7 +1,8 @@
-import { login as xoLogin, logout as xoLogout, projectFilter, xo, XoApiError } from '@/api/xo.ts'
+import { ensureConsoleCookie, login as xoLogin, logout as xoLogout, projectFilter, xo, XoApiError } from '@/api/xo.ts'
 import * as data from '@/mock/data.ts'
 import type {
   ApiKey,
+  BackupPolicy,
   FirewallRule,
   Instance,
   InstanceState,
@@ -14,20 +15,21 @@ import type {
   Project,
   ProjectMember,
   ProjectRole,
+  Provider,
   Quota,
+  RestorePoint,
   Snapshot,
+  SshKey,
   Template,
   TemplateOs,
   UsageLine,
   User,
 } from '@/mock/types.ts'
+import { setCurrency } from '@/utils/format.ts'
 import { useIntervalFn, useLocalStorage } from '@vueuse/core'
 import { defineStore } from 'pinia'
 import { computed, reactive, ref, watch } from 'vue'
 
-const STORAGE_PRICE_PER_GIB_MONTH = 0.05
-const SNAPSHOT_PRICE_PER_GIB_MONTH = 0.05
-const FLOATING_IP_PRICE_PER_HOUR = 0.004
 const HOURS_PER_MONTH = 730
 const GiB = 1024 ** 3
 
@@ -44,10 +46,17 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 const toGiB = (bytes: number) => Math.round(bytes / GiB)
 
+const monthStart = () => {
+  const date = new Date()
+  date.setDate(1)
+  date.setHours(0, 0, 0, 0)
+  return date.getTime()
+}
+
 /**
  * - `mock`: no Xen Orchestra reachable, everything is simulated in the browser
- * - `xo`: projects, members, quota, instances and snapshots come from the XO REST API, the other screens
- *   (networking, backups, billing, API keys) are local previews of features the backend does not have yet
+ * - `xo`: the tenant model of the XO REST API. Private networks behind a virtual router, public IPs as floating
+ *   IPs and the firewall stay local previews: XO does not have them yet
  */
 export type Backend = 'mock' | 'xo'
 
@@ -55,14 +64,17 @@ type Status = 'loading' | 'login' | 'ready'
 
 // --- XO REST API shapes (subset of the fields requested)
 
+type XoQuotaKey = 'instances' | 'vcpus' | 'memory' | 'storage' | 'snapshots' | 'ips'
+
 type XoProjectDetails = {
   id: string
   organizationId: string
   name: string
   description: string
   role: ProjectRole
-  quota: Partial<Record<'instances' | 'vcpus' | 'memory' | 'storage' | 'snapshots', number>>
-  usage: Record<'instances' | 'vcpus' | 'memory' | 'storage' | 'snapshots', number>
+  quota: Partial<Record<XoQuotaKey, number>>
+  usage: Record<XoQuotaKey, number>
+  scope: { ipPools: string[] }
   resources: {
     templates: {
       id: string
@@ -73,6 +85,15 @@ type XoProjectDetails = {
     }[]
     networks: { id: string; name: string; poolId: string }[]
     srs: { id: string; name: string; poolId: string; size: number; usage: number }[]
+    offerings: {
+      id: string
+      name: string
+      family: string
+      cpus: number
+      memory: number
+      disk: number
+      pricePerHour: number
+    }[]
   }
 }
 
@@ -85,6 +106,14 @@ type XoVm = {
   mainIpAddress?: string
   creation?: { date?: string }
   other?: Record<string, string>
+  tags: string[]
+}
+
+type XoVif = {
+  id: string
+  $VM: string
+  $network: string
+  allowedIpv4Addresses?: string[]
 }
 
 type XoVmSnapshot = {
@@ -92,6 +121,21 @@ type XoVmSnapshot = {
   name_label: string
   snapshot_time: number
   $snapshot_of: string
+}
+
+type XoUsageRecord = {
+  at: number
+  vms: { id: string; name: string; cpus: number; memory: number; disk: number; powerState: string; ips: string[] }[]
+  snapshotsPhysicalSize: number
+}
+
+type XoBackupPolicy = { id: string; name: string; tag: string }
+
+type XoAccount = {
+  id: string
+  name: string
+  isAdmin: boolean
+  organizations: { id: string; name: string; role: OrganizationRole; suspended: boolean }[]
 }
 
 const VM_STATES: Record<XoVm['power_state'], InstanceState> = {
@@ -106,12 +150,25 @@ function guessOs(name: string): TemplateOs {
   return (match?.[0].toLowerCase() as TemplateOs | undefined) ?? 'debian'
 }
 
+/** OpenSSH fingerprint (SHA256 of the key blob), undefined where WebCrypto is unavailable (insecure context) */
+async function sshFingerprint(publicKey: string): Promise<string | undefined> {
+  try {
+    const blob = Uint8Array.from(atob(publicKey.trim().split(/\s+/)[1]), char => char.charCodeAt(0))
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', blob))
+    return `SHA256:${btoa(String.fromCharCode(...digest)).replace(/=+$/, '')}`
+  } catch {
+    return undefined
+  }
+}
+
 export const usePortalStore = defineStore('portal', () => {
   const backend = ref<Backend>('mock')
   const status = ref<Status>('loading')
   const lastError = ref<string>()
 
+  const provider = ref<Provider>(data.PROVIDER)
   const currentUser = ref<User>(data.currentUser)
+  const account = ref<XoAccount>()
   const organization = ref<Organization>(data.organization)
   const projects = ref<Project[]>(structuredClone(data.projects))
   const currentProjectId = useLocalStorage('portal-project', data.projects[0].id)
@@ -128,13 +185,21 @@ export const usePortalStore = defineStore('portal', () => {
   const portForwards = ref(structuredClone(data.portForwards))
   const firewallRules = ref(structuredClone(data.firewallRules))
   const apiKeys = ref(structuredClone(data.apiKeys))
-  const sshKeys = ref(structuredClone(data.sshKeys))
+  const sshKeys = ref<SshKey[]>(structuredClone(data.sshKeys))
   const activity = ref(structuredClone(data.activity))
 
   const liveProject = ref<XoProjectDetails>()
+  const liveBackupPolicies = ref<XoBackupPolicy[]>([])
+  const usageRecords = ref<XoUsageRecord[]>([])
   const customOfferings = reactive(new Map<string, Offering>())
 
+  const isLive = computed(() => backend.value === 'xo')
+
   const project = computed(() => projects.value.find(project => project.id === currentProjectId.value)!)
+
+  const organizationSuspended = computed(
+    () => account.value?.organizations.find(_ => _.id === project.value?.organizationId)?.suspended ?? false
+  )
 
   const inProject = <T extends { projectId: string }>(items: T[]) =>
     items.filter(item => item.projectId === currentProjectId.value)
@@ -149,8 +214,11 @@ export const usePortalStore = defineStore('portal', () => {
     snapshots.value.filter(snapshot => projectInstanceIds.value.has(snapshot.instanceId))
   )
 
+  /** public IPs come from the IP pools of the project in live mode, floating IPs are a preview */
+  const hasPublicIpPools = computed(() => isLive.value && (liveProject.value?.scope.ipPools.length ?? 0) !== 0)
+
   const templates = computed<Template[]>(() =>
-    backend.value === 'xo'
+    isLive.value
       ? (liveProject.value?.resources.templates ?? []).map(template => ({
           id: template.id,
           name: template.name,
@@ -162,7 +230,39 @@ export const usePortalStore = defineStore('portal', () => {
       : data.templates
   )
 
-  const getOffering = (id: string) => data.offerings.find(offering => offering.id === id) ?? customOfferings.get(id)!
+  /** with offerings, the project only creates instances of these sizes */
+  const hasProjectOfferings = computed(() => isLive.value && (liveProject.value?.resources.offerings.length ?? 0) !== 0)
+
+  const offerings = computed<Offering[]>(() =>
+    hasProjectOfferings.value
+      ? liveProject.value!.resources.offerings.map(offering => ({
+          id: offering.id,
+          name: offering.name,
+          family: (['general', 'compute', 'memory'].includes(offering.family)
+            ? offering.family
+            : 'general') as Offering['family'],
+          vcpus: offering.cpus,
+          memoryGiB: toGiB(offering.memory),
+          diskGiB: toGiB(offering.disk),
+          pricePerHour: offering.pricePerHour,
+        }))
+      : data.offerings
+  )
+
+  const backupPolicies = computed<BackupPolicy[]>(() =>
+    isLive.value
+      ? liveBackupPolicies.value.map(policy => ({
+          id: policy.id,
+          name: policy.name,
+          description: 'Defined by your provider',
+          schedule: '',
+          retention: 0,
+          pricePerGiBMonth: provider.value.prices.storagePerGiBMonth,
+        }))
+      : data.backupPolicies
+  )
+
+  const getOffering = (id: string) => offerings.value.find(offering => offering.id === id) ?? customOfferings.get(id)!
   const getTemplate = (id: string): Template =>
     templates.value.find(template => template.id === id) ?? {
       id,
@@ -174,7 +274,7 @@ export const usePortalStore = defineStore('portal', () => {
     }
   const getNetwork = (id: string) => networks.value.find(network => network.id === id)
   const getInstance = (id: string) => instances.value.find(instance => instance.id === id)
-  const getBackupPolicy = (id: string | undefined) => data.backupPolicies.find(policy => policy.id === id)
+  const getBackupPolicy = (id: string | undefined) => backupPolicies.value.find(policy => policy.id === id)
 
   const instanceDiskGiB = (instance: Instance) =>
     instance.diskGiB ?? getOffering(instance.offeringId).diskGiB + instance.extraDiskGiB
@@ -182,7 +282,7 @@ export const usePortalStore = defineStore('portal', () => {
   // --- Quota and usage
 
   const quota = computed<Quota>(() => {
-    if (backend.value === 'mock') {
+    if (!isLive.value) {
       return data.quotas[currentProjectId.value]
     }
     const live = liveProject.value?.quota ?? {}
@@ -191,22 +291,21 @@ export const usePortalStore = defineStore('portal', () => {
       vcpus: live.vcpus ?? Infinity,
       memoryGiB: live.memory !== undefined ? toGiB(live.memory) : Infinity,
       storageGiB: live.storage !== undefined ? toGiB(live.storage) : Infinity,
-      // public IPs are a preview, not part of the XO project quota yet
-      floatingIps: 5,
+      floatingIps: hasPublicIpPools.value ? (live.ips ?? Infinity) : 5,
       snapshots: live.snapshots ?? Infinity,
     }
   })
 
   // Quotas count allocated resources, whether the instances are running or not
   const usage = computed(() => {
-    if (backend.value === 'xo' && liveProject.value !== undefined) {
+    if (isLive.value && liveProject.value !== undefined) {
       const live = liveProject.value.usage
       return {
         instances: live.instances,
         vcpus: live.vcpus,
         memoryGiB: toGiB(live.memory),
         storageGiB: toGiB(live.storage),
-        floatingIps: projectFloatingIps.value.length,
+        floatingIps: hasPublicIpPools.value ? live.ips : projectFloatingIps.value.length,
         snapshots: live.snapshots,
       }
     }
@@ -222,12 +321,79 @@ export const usePortalStore = defineStore('portal', () => {
     }
   })
 
-  // Month-to-date usage, as the future usage records API would aggregate it
-  const usageLines = computed<UsageLine[]>(() => {
-    const monthStart = new Date()
-    monthStart.setDate(1)
-    monthStart.setHours(0, 0, 0, 0)
-    const hoursSince = (from: number) => Math.max(0, (Date.now() - Math.max(from, monthStart.getTime())) / 3600e3)
+  /** hourly price of an instance size, from the offerings or the custom rate */
+  function priceOf(vcpus: number, memoryGiB: number) {
+    return (
+      offerings.value.find(offering => offering.vcpus === vcpus && offering.memoryGiB === memoryGiB)?.pricePerHour ??
+      vcpus * CUSTOM_PRICE_PER_VCPU_HOUR + memoryGiB * CUSTOM_PRICE_PER_GIB_HOUR
+    )
+  }
+
+  /** Month to date, from the hourly usage records of XO: each sample counts until the next one */
+  const liveUsageLines = computed<UsageLine[]>(() => {
+    const { prices } = provider.value
+    const lines = new Map<string, UsageLine>()
+    const add = (line: Omit<UsageLine, 'quantity' | 'cost'>, quantity: number, cost: number) => {
+      const key = `${line.category}/${line.resourceId}`
+      const existing = lines.get(key)
+      if (existing === undefined) {
+        lines.set(key, { ...line, quantity, cost })
+      } else {
+        existing.quantity += quantity
+        existing.cost += cost
+      }
+    }
+
+    const records = usageRecords.value
+    records.forEach((record, index) => {
+      // a sample stands for the period until the next one, at most two hours (missed samples)
+      const hours = Math.min(((records[index + 1]?.at ?? Date.now()) - record.at) / 3600e3, 2)
+      for (const vm of record.vms) {
+        const memoryGiB = toGiB(vm.memory)
+        if (vm.powerState === 'Running') {
+          const price = priceOf(vm.cpus, memoryGiB)
+          add(
+            {
+              category: 'compute',
+              resourceId: vm.id,
+              resourceName: `${vm.name} (${vm.cpus} vCPU, ${memoryGiB} GiB)`,
+              unit: 'h',
+            },
+            hours,
+            hours * price
+          )
+        }
+        const diskMonths = (toGiB(vm.disk) * hours) / HOURS_PER_MONTH
+        add(
+          { category: 'storage', resourceId: vm.id, resourceName: `${vm.name} disks`, unit: 'GiB·month' },
+          diskMonths,
+          diskMonths * prices.storagePerGiBMonth
+        )
+        for (const ip of vm.ips) {
+          add(
+            { category: 'floating-ips', resourceId: ip, resourceName: `${ip} (${vm.name})`, unit: 'h' },
+            hours,
+            hours * prices.ipPerHour
+          )
+        }
+      }
+      const snapshotMonths = ((record.snapshotsPhysicalSize / GiB) * hours) / HOURS_PER_MONTH
+      if (snapshotMonths > 0) {
+        add(
+          { category: 'snapshots', resourceId: 'snapshots', resourceName: 'Snapshots (space used)', unit: 'GiB·month' },
+          snapshotMonths,
+          snapshotMonths * prices.snapshotPerGiBMonth
+        )
+      }
+    })
+    return [...lines.values()]
+  })
+
+  // Month-to-date usage of the mock, as the usage records would aggregate it
+  const mockUsageLines = computed<UsageLine[]>(() => {
+    const { prices } = provider.value
+    const start = monthStart()
+    const hoursSince = (from: number) => Math.max(0, (Date.now() - Math.max(from, start)) / 3600e3)
     const monthFraction = hoursSince(0) / HOURS_PER_MONTH
 
     const lines: UsageLine[] = []
@@ -253,7 +419,7 @@ export const usePortalStore = defineStore('portal', () => {
         resourceName: `${instance.name} disks`,
         quantity: diskGiB * storageMonths,
         unit: 'GiB·month',
-        cost: diskGiB * storageMonths * STORAGE_PRICE_PER_GIB_MONTH,
+        cost: diskGiB * storageMonths * prices.storagePerGiBMonth,
       })
 
       const policy = getBackupPolicy(instance.backupPolicyId)
@@ -280,7 +446,7 @@ export const usePortalStore = defineStore('portal', () => {
         resourceName: snapshot.name,
         quantity: snapshot.sizeGiB * months,
         unit: 'GiB·month',
-        cost: snapshot.sizeGiB * months * SNAPSHOT_PRICE_PER_GIB_MONTH,
+        cost: snapshot.sizeGiB * months * prices.snapshotPerGiBMonth,
       })
     }
 
@@ -292,28 +458,32 @@ export const usePortalStore = defineStore('portal', () => {
         resourceName: ip.address,
         quantity: hours,
         unit: 'h',
-        cost: hours * FLOATING_IP_PRICE_PER_HOUR,
+        cost: hours * prices.ipPerHour,
       })
     }
 
     return lines
   })
 
+  const usageLines = computed(() => (isLive.value ? liveUsageLines.value : mockUsageLines.value))
+
   const monthToDateCost = computed(() => usageLines.value.reduce((sum, line) => sum + line.cost, 0))
 
-  const estimatedHourlyCost = computed(
-    () =>
+  const estimatedHourlyCost = computed(() => {
+    const { prices } = provider.value
+    return (
       projectInstances.value
         .filter(instance => instance.state !== 'halted')
         .reduce((sum, instance) => sum + getOffering(instance.offeringId).pricePerHour, 0) +
-      projectFloatingIps.value.length * FLOATING_IP_PRICE_PER_HOUR +
-      (usage.value.storageGiB * STORAGE_PRICE_PER_GIB_MONTH) / HOURS_PER_MONTH
-  )
+      usage.value.floatingIps * prices.ipPerHour +
+      (usage.value.storageGiB * prices.storagePerGiBMonth) / HOURS_PER_MONTH
+    )
+  })
 
   // --- Members and roles
 
   const projectMembers = computed(() =>
-    backend.value === 'xo' ? liveProjectMembers.value : (mockProjectMembers[currentProjectId.value] ?? [])
+    isLive.value ? liveProjectMembers.value : (mockProjectMembers[currentProjectId.value] ?? [])
   )
 
   const organizationRole = computed<OrganizationRole | undefined>(() =>
@@ -359,7 +529,7 @@ export const usePortalStore = defineStore('portal', () => {
   // --- Live mode
 
   function getOfferingId(vcpus: number, memoryGiB: number) {
-    const offering = data.offerings.find(offering => offering.vcpus === vcpus && offering.memoryGiB === memoryGiB)
+    const offering = offerings.value.find(offering => offering.vcpus === vcpus && offering.memoryGiB === memoryGiB)
     if (offering !== undefined) {
       return offering.id
     }
@@ -372,22 +542,22 @@ export const usePortalStore = defineStore('portal', () => {
         vcpus,
         memoryGiB,
         diskGiB: 0,
-        pricePerHour: vcpus * CUSTOM_PRICE_PER_VCPU_HOUR + memoryGiB * CUSTOM_PRICE_PER_GIB_HOUR,
+        pricePerHour: priceOf(vcpus, memoryGiB),
       })
     }
     return id
   }
 
-  // Backup policies and disk sizes are not part of the VM objects: keep what we know across refreshes
-  const knownBackupPolicies = useLocalStorage<Record<string, string>>('portal-backup-policies', {})
+  // disk sizes are not part of the VM objects: keep what we know across refreshes
   const knownDiskSizes = reactive(new Map<string, number>())
 
-  function toInstance(vm: XoVm): Instance {
+  function toInstance(vm: XoVm, vifs: XoVif[]): Instance {
     // allocated memory: `size` is the actual usage of running VMs
     const memoryGiB = toGiB(vm.memory.dynamic[1])
     const baseTemplate = vm.other?.base_template_name ?? ''
     const template = liveProject.value?.resources.templates.find(template => template.name === baseTemplate)
     const createdAt = Date.parse(vm.creation?.date ?? '')
+    const ownVifs = vifs.filter(vif => vif.$VM === vm.id)
 
     return {
       id: vm.id,
@@ -396,11 +566,12 @@ export const usePortalStore = defineStore('portal', () => {
       state: VM_STATES[vm.power_state] ?? 'halted',
       offeringId: getOfferingId(vm.CPUs.number, memoryGiB),
       templateId: template?.id ?? `unknown:${baseTemplate}`,
-      networkId: '',
+      networkId: ownVifs[0]?.$network ?? '',
       privateIp: vm.mainIpAddress ?? '',
+      publicIps: ownVifs.flatMap(vif => vif.allowedIpv4Addresses ?? []),
       extraDiskGiB: 0,
       diskGiB: knownDiskSizes.get(vm.id),
-      backupPolicyId: knownBackupPolicies.value[vm.id],
+      backupPolicyId: liveBackupPolicies.value.find(policy => vm.tags.includes(policy.tag))?.id,
       sshKeyIds: [],
       createdAt: Number.isNaN(createdAt) ? Date.now() : createdAt,
     }
@@ -408,10 +579,15 @@ export const usePortalStore = defineStore('portal', () => {
 
   async function refreshProject() {
     const id = currentProjectId.value
-    liveProject.value = await xo.get<XoProjectDetails>(`/projects/${id}`)
+    const [details, policies] = await Promise.all([
+      xo.get<XoProjectDetails>(`/projects/${id}`),
+      xo.get<XoBackupPolicy[]>(`/projects/${id}/backup-policies`),
+    ])
+    liveProject.value = details
+    liveBackupPolicies.value = policies
 
     // the scoped networks stand in for the private networks until the virtual router exists
-    networks.value = liveProject.value.resources.networks.map(
+    networks.value = details.resources.networks.map(
       (network): Network => ({
         id: network.id,
         projectId: id,
@@ -427,15 +603,18 @@ export const usePortalStore = defineStore('portal', () => {
   async function refreshInstances() {
     const id = currentProjectId.value
     const filter = projectFilter(id)
-    const [vms, vmSnapshots] = await Promise.all([
-      xo.get<XoVm[]>(`/vms?fields=id,name_label,power_state,CPUs,memory,mainIpAddress,creation,other&filter=${filter}`),
+    const [vms, vmSnapshots, vifs] = await Promise.all([
+      xo.get<XoVm[]>(
+        `/vms?fields=id,name_label,power_state,CPUs,memory,mainIpAddress,creation,other,tags&filter=${filter}`
+      ),
       xo.get<XoVmSnapshot[]>(`/vm-snapshots?fields=id,name_label,snapshot_time,$snapshot_of&filter=${filter}`),
+      xo.get<XoVif[]>(`/vifs?fields=id,$VM,$network,allowedIpv4Addresses&filter=${filter}`),
     ])
     if (id !== currentProjectId.value) {
       return
     }
 
-    instances.value = vms.map(toInstance)
+    instances.value = vms.map(vm => toInstance(vm, vifs))
     snapshots.value = vmSnapshots.map(
       (snapshot): Snapshot => ({
         id: snapshot.id,
@@ -445,6 +624,32 @@ export const usePortalStore = defineStore('portal', () => {
         sizeGiB: 0,
       })
     )
+  }
+
+  async function refreshRestorePoints() {
+    const points = await xo.get<
+      { id: string; vmId: string; vmName: string; timestamp: number; size: number; policyId: string }[]
+    >(`/projects/${currentProjectId.value}/restore-points`)
+    restorePoints.value = points.map(
+      (point): RestorePoint => ({
+        id: point.id,
+        instanceId: point.vmId,
+        policyId: point.policyId,
+        createdAt: point.timestamp,
+        sizeGiB: Math.round((point.size / GiB) * 10) / 10,
+      })
+    )
+  }
+
+  async function loadUsageRecords() {
+    if (!isLive.value) {
+      return
+    }
+    await guard(async () => {
+      usageRecords.value = await xo.get<XoUsageRecord[]>(
+        `/projects/${currentProjectId.value}/usage-records?from=${monthStart()}`
+      )
+    })
   }
 
   async function refreshMembers() {
@@ -457,19 +662,50 @@ export const usePortalStore = defineStore('portal', () => {
     organizationMembers.value = orgMembers
   }
 
+  async function refreshAccountData() {
+    const [keys, tokens] = await Promise.all([
+      xo.get<{ title: string; key: string }[]>('/account/ssh-keys'),
+      xo.get<{ prefix: string; description?: string; createdAt?: number; lastUsedAt?: number }[]>('/account/tokens'),
+    ])
+    sshKeys.value = await Promise.all(
+      keys.map(
+        async ({ title, key }): Promise<SshKey> => ({
+          id: key,
+          name: title,
+          fingerprint: (await sshFingerprint(key)) ?? key.split(/\s+/)[0],
+          createdAt: 0,
+          publicKey: key,
+        })
+      )
+    )
+    // the session of the portal itself is not an API key
+    apiKeys.value = tokens
+      .filter(token => token.description !== 'Cloud portal session')
+      .map(
+        (token): ApiKey => ({
+          id: token.prefix,
+          name: token.description ?? token.prefix,
+          prefix: token.prefix,
+          role: 'project-admin',
+          createdAt: token.createdAt ?? 0,
+          lastUsedAt: token.lastUsedAt,
+        })
+      )
+  }
+
   async function loadProject() {
-    if (backend.value !== 'xo' || project.value === undefined) {
+    if (!isLive.value || project.value === undefined) {
       return
     }
     await guard(async () => {
       organization.value = await xo.get<Organization>(`/organizations/${project.value.organizationId}`)
       await refreshProject()
-      await Promise.all([refreshInstances(), refreshMembers()])
+      await Promise.all([refreshInstances(), refreshMembers(), refreshRestorePoints(), loadUsageRecords()])
     })
   }
 
   async function refreshLive() {
-    if (backend.value !== 'xo' || status.value !== 'ready' || project.value === undefined) {
+    if (!isLive.value || status.value !== 'ready' || project.value === undefined) {
       return
     }
     try {
@@ -481,20 +717,59 @@ export const usePortalStore = defineStore('portal', () => {
     }
   }
 
-  // XO events would be better, polling is enough for the prototype
-  useIntervalFn(refreshLive, 10e3)
+  // events trigger refreshes, polling only covers a lost event stream
+  useIntervalFn(refreshLive, 60e3)
+
+  let eventSource: EventSource | undefined
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined
+  function scheduleRefresh() {
+    clearTimeout(refreshTimer)
+    refreshTimer = setTimeout(refreshLive, 1000)
+  }
+
+  /** XO REST events (server-sent events), filtered by XO with the rights of the user */
+  function connectEvents() {
+    eventSource?.close()
+    eventSource = new EventSource('/rest/v0/events')
+    eventSource.addEventListener('init', async event => {
+      const { id } = JSON.parse((event as MessageEvent).data)
+      for (const [collection, fields] of [
+        ['VM', ['id', 'name_label', 'power_state', 'tags', 'mainIpAddress', 'CPUs', 'memory', '$project']],
+        ['VM-snapshot', ['id', 'name_label', '$project']],
+        ['VIF', ['id', 'allowedIpv4Addresses', '$project']],
+      ] as const) {
+        await xo.post(`/events/${id}/subscriptions`, { collection, fields }).catch(() => {})
+      }
+    })
+    for (const type of ['add', 'update', 'remove']) {
+      eventSource.addEventListener(type, scheduleRefresh)
+    }
+  }
 
   watch(currentProjectId, async () => {
-    if (backend.value === 'xo') {
+    if (isLive.value) {
       instances.value = []
       snapshots.value = []
+      restorePoints.value = []
+      usageRecords.value = []
       await loadProject()
     }
   })
 
+  async function loadProvider() {
+    try {
+      const config = await xo.get<Provider>('/portal-config')
+      provider.value = { ...data.PROVIDER, ...config }
+    } catch {
+      provider.value = data.PROVIDER
+    }
+    setCurrency(provider.value.currency)
+  }
+
   async function loadSession() {
-    const user = await xo.get<{ id: string; email: string; name?: string; permission: string }>('/users/me')
-    currentUser.value = { id: user.id, name: user.name ?? user.email, isAdmin: user.permission === 'admin' }
+    ensureConsoleCookie()
+    account.value = await xo.get<XoAccount>('/account')
+    currentUser.value = { id: account.value.id, name: account.value.name, isAdmin: account.value.isAdmin }
 
     projects.value = await xo.get<Project[]>('/projects')
     if (!projects.value.some(project => project.id === currentProjectId.value)) {
@@ -509,7 +784,8 @@ export const usePortalStore = defineStore('portal', () => {
     activity.value = []
 
     status.value = 'ready'
-    await loadProject()
+    connectEvents()
+    await Promise.all([loadProject(), guard(refreshAccountData)])
   }
 
   /**
@@ -517,18 +793,21 @@ export const usePortalStore = defineStore('portal', () => {
    */
   async function init() {
     try {
-      await xo.get('/users/me')
+      await xo.get('/account')
     } catch (error) {
       if (error instanceof XoApiError && error.status === 401) {
         backend.value = 'xo'
+        await loadProvider()
         status.value = 'login'
         return
       }
       backend.value = 'mock'
+      setCurrency(provider.value.currency)
       status.value = 'ready'
       return
     }
     backend.value = 'xo'
+    await loadProvider()
     await guard(loadSession)
   }
 
@@ -538,9 +817,19 @@ export const usePortalStore = defineStore('portal', () => {
   }
 
   function logout() {
+    eventSource?.close()
     xoLogout()
     status.value = 'login'
     liveProject.value = undefined
+    account.value = undefined
+  }
+
+  async function changePassword(oldPassword: string, newPassword: string) {
+    if (!isLive.value) {
+      await wait(300)
+      return true
+    }
+    return (await guard(() => xo.post('/account/actions/change_password', { oldPassword, newPassword }))) !== undefined
   }
 
   // --- Instances
@@ -554,7 +843,7 @@ export const usePortalStore = defineStore('portal', () => {
     backupPolicyId: string | undefined
     sshKeyIds: string[]
   }): Promise<Instance | undefined> {
-    if (backend.value === 'xo') {
+    if (isLive.value) {
       return guard(async () => {
         const offering = getOffering(params.offeringId)
         const template = liveProject.value!.resources.templates.find(template => template.id === params.templateId)
@@ -585,8 +874,9 @@ export const usePortalStore = defineStore('portal', () => {
           pool: template.poolId,
           template: template.uuid,
           name_label: params.name,
-          cpus: offering.vcpus,
-          memory: offering.memoryGiB * GiB,
+          ...(hasProjectOfferings.value
+            ? { offering: offering.id }
+            : { cpus: offering.vcpus, memory: offering.memoryGiB * GiB }),
           vdis,
           vifs: [{ network: params.networkId }],
           boot: true,
@@ -595,10 +885,12 @@ export const usePortalStore = defineStore('portal', () => {
           }),
         })
 
-        if (params.backupPolicyId !== undefined) {
-          knownBackupPolicies.value = { ...knownBackupPolicies.value, [id]: params.backupPolicyId }
-        }
         log(`Created instance ${params.name}`)
+        if (params.backupPolicyId !== undefined) {
+          await xo.put(`/projects/${currentProjectId.value}/vms/${id}/backup-policy`, {
+            policyId: params.backupPolicyId,
+          })
+        }
         await Promise.all([refreshProject(), refreshInstances()])
         return getInstance(id)
       })
@@ -636,7 +928,7 @@ export const usePortalStore = defineStore('portal', () => {
     const instance = getInstance(id)!
     const label = `${action === 'start' ? 'Started' : action === 'stop' ? 'Stopped' : 'Rebooted'} instance ${instance.name}`
 
-    if (backend.value === 'xo') {
+    if (isLive.value) {
       await guard(async () => {
         try {
           await xo.post(`/vms/${id}/actions/${POWER_ACTIONS[action]}?sync=true`)
@@ -676,7 +968,7 @@ export const usePortalStore = defineStore('portal', () => {
   async function deleteInstance(id: string) {
     const instance = getInstance(id)!
 
-    if (backend.value === 'xo') {
+    if (isLive.value) {
       return guard(async () => {
         await xo.delete(`/vms/${id}`)
         forgetInstance(id)
@@ -693,7 +985,7 @@ export const usePortalStore = defineStore('portal', () => {
   }
 
   async function loadInstanceDisks(id: string) {
-    if (backend.value !== 'xo') {
+    if (!isLive.value) {
       return
     }
     await guard(async () => {
@@ -712,7 +1004,7 @@ export const usePortalStore = defineStore('portal', () => {
   async function createSnapshot(instanceId: string, name: string) {
     const instance = getInstance(instanceId)!
 
-    if (backend.value === 'xo') {
+    if (isLive.value) {
       await guard(async () => {
         await xo.post(`/vms/${instanceId}/actions/snapshot?sync=true`, { name_label: name })
         log(`Snapshot ${name} of ${instance.name}`)
@@ -736,7 +1028,7 @@ export const usePortalStore = defineStore('portal', () => {
     const snapshot = snapshots.value.find(item => item.id === snapshotId)!
     const instance = getInstance(snapshot.instanceId)!
 
-    if (backend.value === 'xo') {
+    if (isLive.value) {
       instance.state = 'restoring'
       await guard(async () => {
         await xo.post(`/vms/${instance.id}/actions/revert_snapshot?sync=true`, { snapshotId })
@@ -755,7 +1047,7 @@ export const usePortalStore = defineStore('portal', () => {
   async function deleteSnapshot(snapshotId: string) {
     const snapshot = snapshots.value.find(item => item.id === snapshotId)!
 
-    if (backend.value === 'xo') {
+    if (isLive.value) {
       await guard(async () => {
         await xo.delete(`/vm-snapshots/${snapshotId}`)
         snapshots.value = snapshots.value.filter(item => item.id !== snapshotId)
@@ -770,48 +1062,70 @@ export const usePortalStore = defineStore('portal', () => {
     log(`Deleted snapshot ${snapshot.name}`)
   }
 
-  // --- Backups (preview in both modes)
+  // --- Backups
 
-  function setBackupPolicy(instanceId: string, policyId: string | undefined) {
+  async function setBackupPolicy(instanceId: string, policyId: string | undefined) {
     const instance = getInstance(instanceId)!
-    instance.backupPolicyId = policyId
-    if (backend.value === 'xo') {
-      const policies = { ...knownBackupPolicies.value }
-      if (policyId === undefined) {
-        delete policies[instanceId]
-      } else {
-        policies[instanceId] = policyId
-      }
-      knownBackupPolicies.value = policies
-    }
-    log(
+    const message =
       policyId === undefined
         ? `Disabled backups for ${instance.name}`
         : `Enabled ${getBackupPolicy(policyId)!.name} backups for ${instance.name}`
-    )
+
+    if (isLive.value) {
+      await guard(async () => {
+        await xo.put(`/projects/${currentProjectId.value}/vms/${instanceId}/backup-policy`, {
+          policyId: policyId ?? null,
+        })
+        log(message)
+        await refreshInstances()
+      })
+      return
+    }
+
+    instance.backupPolicyId = policyId
+    log(message)
   }
+
+  /** In live mode, restores happen as a new instance only */
+  const canRestoreInPlace = computed(() => !isLive.value)
 
   async function restore(restorePointId: string, mode: 'in-place' | 'new-instance') {
     const point = restorePoints.value.find(item => item.id === restorePointId)!
-    const instance = getInstance(point.instanceId)!
+    const instance = getInstance(point.instanceId)
     const date = new Date(point.createdAt).toLocaleString()
 
+    if (isLive.value) {
+      return guard(async () => {
+        const sr = liveProject.value!.resources.srs[0]
+        if (sr === undefined) {
+          throw new Error('No storage available to the project')
+        }
+        const { id } = await xo.post<{ id: string }>(`/projects/${currentProjectId.value}/actions/restore`, {
+          restorePoint: restorePointId,
+          sr: sr.id,
+        })
+        log(`Restored ${instance?.name ?? 'an instance'} from the backup of ${date} as a new instance`)
+        await Promise.all([refreshProject(), refreshInstances()])
+        return getInstance(id)
+      })
+    }
+
     if (mode === 'in-place') {
-      instance.state = 'restoring'
-      log(`Restoring ${instance.name} from backup of ${date}`)
+      instance!.state = 'restoring'
+      log(`Restoring ${instance!.name} from backup of ${date}`)
       await wait(3000)
-      instance.state = 'running'
+      instance!.state = 'running'
       return instance
     }
 
     return createInstance({
-      name: `${instance.name}-restored`,
-      offeringId: instance.offeringId,
-      templateId: instance.templateId,
-      networkId: instance.networkId,
-      extraDiskGiB: instance.extraDiskGiB,
+      name: `${instance!.name}-restored`,
+      offeringId: instance!.offeringId,
+      templateId: instance!.templateId,
+      networkId: instance!.networkId,
+      extraDiskGiB: instance!.extraDiskGiB,
       backupPolicyId: undefined,
-      sshKeyIds: instance.sshKeyIds,
+      sshKeyIds: instance!.sshKeyIds,
     })
   }
 
@@ -894,9 +1208,22 @@ export const usePortalStore = defineStore('portal', () => {
     firewallRules.value = firewallRules.value.filter(item => item.id !== id)
   }
 
-  // --- Access (preview in both modes)
+  // --- Access
 
-  function createApiKey(name: string, role: ApiKey['role']) {
+  /** Returns the secret, shown once */
+  async function createApiKey(name: string, role: ApiKey['role']): Promise<string | undefined> {
+    if (isLive.value) {
+      return guard(async () => {
+        const { token } = await xo.post<{ token: string }>('/account/tokens', {
+          description: name,
+          expiresIn: '1 year',
+        })
+        log(`Created API key ${name}`)
+        await refreshAccountData()
+        return token
+      })
+    }
+
     const secret = `xop_${randomHex(4)}_${randomHex(32)}`
     apiKeys.value.push({
       id: uid('ak'),
@@ -910,23 +1237,44 @@ export const usePortalStore = defineStore('portal', () => {
     return secret
   }
 
-  function revokeApiKey(id: string) {
+  async function revokeApiKey(id: string) {
     const key = apiKeys.value.find(item => item.id === id)!
-    apiKeys.value = apiKeys.value.filter(item => item.id !== id)
+    if (isLive.value) {
+      await guard(async () => {
+        await xo.delete(`/account/tokens/${key.prefix}`)
+        await refreshAccountData()
+      })
+    } else {
+      apiKeys.value = apiKeys.value.filter(item => item.id !== id)
+    }
     log(`Revoked API key ${key.name}`)
   }
 
-  function addSshKey(name: string, publicKey: string) {
+  async function addSshKey(name: string, publicKey: string) {
+    if (isLive.value) {
+      await guard(async () => {
+        await xo.post('/account/ssh-keys', { title: name, key: publicKey })
+        await refreshAccountData()
+      })
+      return
+    }
     sshKeys.value.push({
       id: uid('key'),
       name,
-      fingerprint: `SHA256:${randomHex(4)}…${randomHex(4)}`,
+      fingerprint: (await sshFingerprint(publicKey)) ?? `SHA256:${randomHex(4)}…${randomHex(4)}`,
       createdAt: Date.now(),
       publicKey,
     })
   }
 
-  function removeSshKey(id: string) {
+  async function removeSshKey(id: string) {
+    if (isLive.value) {
+      await guard(async () => {
+        await xo.post('/account/ssh-keys/actions/remove', { key: id })
+        await refreshAccountData()
+      })
+      return
+    }
     sshKeys.value = sshKeys.value.filter(item => item.id !== id)
   }
 
@@ -939,7 +1287,7 @@ export const usePortalStore = defineStore('portal', () => {
   async function setProjectMember(userId: string, role: ProjectRole | null) {
     const name = findOrganizationMember(userId).name
 
-    if (backend.value === 'xo') {
+    if (isLive.value) {
       const done = await guard(async () => {
         if (role === null) {
           await xo.delete(`/projects/${currentProjectId.value}/members/${userId}`)
@@ -969,7 +1317,7 @@ export const usePortalStore = defineStore('portal', () => {
     const name = findOrganizationMember(userId).name
     const organizationId = organization.value.id
 
-    if (backend.value === 'xo') {
+    if (isLive.value) {
       const done = await guard(async () => {
         if (role === null) {
           await xo.delete(`/organizations/${organizationId}/members/${userId}`)
@@ -1004,7 +1352,7 @@ export const usePortalStore = defineStore('portal', () => {
   }) {
     let userId: string | undefined
 
-    if (backend.value === 'xo') {
+    if (isLive.value) {
       userId = await guard(async () => {
         const { id } = await xo.post<{ id: string }>(`/organizations/${organization.value.id}/users`, {
           name: params.name,
@@ -1030,24 +1378,48 @@ export const usePortalStore = defineStore('portal', () => {
     return true
   }
 
+  /** Returns the new temporary password, to share with the member */
+  async function resetMemberPassword(userId: string): Promise<string | undefined> {
+    if (!isLive.value) {
+      await wait(300)
+      return randomHex(16)
+    }
+    return guard(async () => {
+      const { password } = await xo.post<{ password: string }>(
+        `/organizations/${organization.value.id}/members/${userId}/actions/reset_password`
+      )
+      log(`Reset the password of ${findOrganizationMember(userId).name}`)
+      return password
+    })
+  }
+
   return {
     backend,
+    isLive,
     status,
     lastError,
     init,
     login,
     logout,
+    changePassword,
+    provider,
     currentUser,
     organization,
+    organizationSuspended,
     projects,
     currentProjectId,
     project,
     quota,
     usage,
     usageLines,
+    loadUsageRecords,
     monthToDateCost,
     estimatedHourlyCost,
     templates,
+    offerings,
+    hasProjectOfferings,
+    hasPublicIpPools,
+    backupPolicies,
     instances: projectInstances,
     networks: projectNetworks,
     floatingIps: projectFloatingIps,
@@ -1063,6 +1435,7 @@ export const usePortalStore = defineStore('portal', () => {
     organizationRole,
     canManageProject,
     canManageOrganization,
+    canRestoreInPlace,
     getOffering,
     getTemplate,
     getNetwork,
@@ -1093,5 +1466,6 @@ export const usePortalStore = defineStore('portal', () => {
     setProjectMember,
     setOrganizationMember,
     createUser,
+    resetMemberPassword,
   }
 })

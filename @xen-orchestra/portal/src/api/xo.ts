@@ -2,6 +2,8 @@
 
 const BASE_URL = '/rest/v0'
 const TOKEN_COOKIE = 'authenticationToken'
+// the console proxy of xo-server only reads the `token` cookie
+const CONSOLE_TOKEN_COOKIE = 'token'
 
 export class XoApiError extends Error {
   constructor(
@@ -66,9 +68,23 @@ export async function login(username: string, password: string) {
       headers: { authorization: `Basic ${btoa(`${username}:${password}`)}` },
     }
   )
-  document.cookie = `${TOKEN_COOKIE}=${encodeURIComponent(token.id)}; path=/; SameSite=Strict; max-age=86400`
+  setCookie(TOKEN_COOKIE, token.id, 86400)
+  setCookie(CONSOLE_TOKEN_COOKIE, token.id, 86400)
 }
 
 export function logout() {
-  document.cookie = `${TOKEN_COOKIE}=; path=/; SameSite=Strict; max-age=0`
+  setCookie(TOKEN_COOKIE, '', 0)
+  setCookie(CONSOLE_TOKEN_COOKIE, '', 0)
+}
+
+function setCookie(name: string, value: string, maxAge: number) {
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; SameSite=Strict; max-age=${maxAge}`
+}
+
+/** For sessions opened before the console cookie existed */
+export function ensureConsoleCookie() {
+  const cookies = Object.fromEntries(document.cookie.split('; ').map(cookie => cookie.split('=')))
+  if (cookies[TOKEN_COOKIE] !== undefined && cookies[CONSOLE_TOKEN_COOKIE] === undefined) {
+    setCookie(CONSOLE_TOKEN_COOKIE, decodeURIComponent(cookies[TOKEN_COOKIE]), 86400)
+  }
 }

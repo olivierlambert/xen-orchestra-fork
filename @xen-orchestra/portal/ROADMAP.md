@@ -2,7 +2,7 @@
 
 Where the tenant model and the portal stand, and what comes after the MVP.
 
-## MVP scope (this branch)
+## MVP scope (this branch, done)
 
 **Must have**, to sign and run a first paying customer:
 
@@ -20,6 +20,10 @@ Where the tenant model and the portal stand, and what comes after the MVP.
 - API keys backed by XO authentication tokens
 - Live updates through XO events instead of polling
 - Project ownership on network interfaces and disk attachments, cleanup of deleted users
+
+Validated end to end on a lab pool (API suites and portal UI), including a real backup and restore, console,
+suspension and usage records. Not verified yet: the cloud-init configuration inside a guest (the lab has no image with an
+OS) and the live updates through events (the portal also polls every minute).
 
 ## Later
 

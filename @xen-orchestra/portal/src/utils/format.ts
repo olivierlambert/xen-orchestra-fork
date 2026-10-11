@@ -1,8 +1,14 @@
-import { CURRENCY } from '@/mock/data.ts'
+let money: Intl.NumberFormat
+let preciseMoney: Intl.NumberFormat
+const number = new Intl.NumberFormat('en', { maximumFractionDigits: 2 })
 
-const money = new Intl.NumberFormat('en', { style: 'currency', currency: CURRENCY, maximumFractionDigits: 2 })
-const preciseMoney = new Intl.NumberFormat('en', { style: 'currency', currency: CURRENCY, maximumFractionDigits: 3 })
-const number = new Intl.NumberFormat('en', { maximumFractionDigits: 1 })
+/** the currency comes from the provider configuration */
+export function setCurrency(currency: string) {
+  money = new Intl.NumberFormat('en', { style: 'currency', currency, maximumFractionDigits: 2 })
+  preciseMoney = new Intl.NumberFormat('en', { style: 'currency', currency, maximumFractionDigits: 3 })
+}
+
+setCurrency('EUR')
 
 export const formatMoney = (value: number) => money.format(value)
 
